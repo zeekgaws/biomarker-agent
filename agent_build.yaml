@@ -1,0 +1,512 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a Bedrock Agent and action group
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Description: The ID of the Foundation Model to use for the Agent
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+  EnvironmentName:
+    Type: String
+    Description: The name of the agent environment, used to differenciate agent application.
+    Default: Medical-Research-Assistant
+
+
+Resources:
+  AgentResource:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub biomarker-agent-${EnvironmentName}
+      AgentResourceRoleArn: !GetAtt AgentRole.Arn
+      AutoPrepare : True
+      FoundationModel: !Ref BedrockModelId
+      Instruction: "You are a medical research assistant that generates SQL queries against a database containing medical
+       biomarker information. Before executing any SQL query, you should first evaluate its efficiency and correctness by 
+       calling the `/evaluatesql` API with the proposed SQL query and the related question. This API will analyze the query 
+       and return an evaluated or optimized version if needed. Only after receiving the evaluated query from this API should you 
+       proceed to execute the query by calling the `/queryredshift` API. Additionally, you can look up the schema of the database 
+       tables by calling the `/getschema` API to ensure your queries are correctly formatted and targeting the appropriate columns. 
+       Please remove all next line ("\n") characters from the sql queries."
+      Description: "Agent for querying biomaker database."
+      ActionGroups:
+        - ActionGroupName: sqlActionGroup
+          Description: Action for getting the database schema and querying the database
+          ActionGroupExecutor: 
+            Lambda: !GetAtt AgentLambdaFunction.Arn
+          ApiSchema:
+            Payload: |
+              {
+                  "openapi": "3.0.1",
+                  "info": {
+                      "title": "Database schema look up and query APIs",
+                      "version": "1.0.0",
+                      "description": "APIs for looking up database table schemas and making queries to database tables."
+                  },
+                  "paths": {
+                      "/getschema": {
+                          "get": {
+                              "summary": "Get a list of all columns in the redshift database",
+                              "description": "Get the list of all columns in the redshift database table. Return all the column information in database table.",
+                              "operationId": "getschema",
+                              "responses": {
+                                  "200": {
+                                      "description": "Gets the list of table names and their schemas in the database",
+                                      "content": {
+                                          "application/json": {
+                                              "schema": {
+                                                  "type": "array",
+                                                  "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                          "Table": {
+                                                              "type": "string",
+                                                              "description": "The name of the table in the database."
+                                                          },
+                                                          "Schema": {
+                                                              "type": "string",
+                                                              "description": "The schema of the table in the database. Contains all columns needed for making queries."
+                                                          }
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      },
+                      "/queryredshift": {
+                          "post": {
+                              "summary": "API to send query to the redshift database table",
+                              "description": "Send a query to the database table to retrieve information pertaining to the users question . The API takes in only one SQL query at a time, sends the SQL statement and returns the query results from the table. This API should be called for each SQL query to a database table.",
+                              "operationId": "queryredshift",
+                              "requestBody": {
+                                  "required": true,
+                                  "content": {
+                                      "application/json": {
+                                          "schema": {
+                                              "type": "object",
+                                              "properties": {
+                                                  "query": {
+                                                      "type": "string",
+                                                      "description": "SQL statement to query database table."
+                                                  }
+                                              },
+                                              "required": [
+                                                  "query"
+                                              ]
+                                          }
+                                      }
+                                  }
+                              },
+                              "responses": {
+                                  "200": {
+                                      "description": "Query sent successfully",
+                                      "content": {
+                                          "application/json": {
+                                              "schema": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                      "responsebody": {
+                                                          "type": "string",
+                                                          "description": "The query response from the database."
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  },
+                                  "400": {
+                                      "description": "Bad request. One or more required fields are missing or invalid."
+                                  }
+                              }
+                          }
+                      },
+                      "/evaluatesql": {
+                          "post": {
+                            "summary": "Evaluate SQL query efficiency",
+                            "description": "Evaluate the efficiency of an SQL query based on the provided schema, query, and question.",
+                            "operationId": "evaluatesql",
+                            "requestBody": {
+                              "required": true,
+                              "content": {
+                                "application/json": {
+                                  "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                      "sql": {
+                                        "type": "string",
+                                        "description": "The SQL query to evaluate."
+                                      },
+                                      "question": {
+                                        "type": "string",
+                                        "description": "The question related to the SQL query."
+                                      }
+                                    },
+                                    "required": [
+                                      "sql",
+                                      "question"
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "responses": {
+                              "200": {
+                                "description": "Successful response",
+                                "content": {
+                                  "application/json": {
+                                    "schema": {
+                                      "type": "object",
+                                      "properties": {
+                                        "evaluatedQuery": {
+                                          "type": "string",
+                                          "description": "The evaluated SQL query, or the original query if it is efficient."
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "400": {
+                                "description": "Bad request. One or more required fields are missing or invalid."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+
+  
+  AgentAliasResource:
+    Type: AWS::Bedrock::AgentAlias
+    Properties:
+      AgentId: !GetAtt AgentResource.AgentId
+      AgentAliasName: !Sub biomakers-alias
+      
+
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockInvokeModel
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: arn:aws:s3:::*
+  ########################
+  ##### ActionGroup #####
+  ######################
+
+  AgentLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      FunctionName: !Sub biomarker-agent-${EnvironmentName}
+      Handler: index.lambda_handler
+      Role: !GetAtt AgentLambdaRole.Arn
+      Timeout: 900
+      Code:
+        ZipFile: |
+          import boto3
+          import time
+          from collections import defaultdict
+          redshift_client = boto3.client('redshift-data')
+
+          def evaluatesql(sql,question):
+              schema_dict = {
+              'case_id': ['Unique case identifier'],
+              'patient_affiliation': ['Stanford, VA'],
+              'age_at_histological_diagnosis': ['Numeric age value'],
+              'weight': ['Numeric weight value, Not Collected'],
+              'gender': ['Male, Female'],
+              'ethnicity': ['Not Recorded In Database', 'Caucasian', 'Asian', 'Native Hawaiian/Pacific Islander', 'African-American', 'Hispanic/Latino'],
+              'smoking_status': ['Nonsmoker', 'Former', 'Current'],
+              'pack_years': ['Numeric pack year value', 'N/A'],
+              'quit_smoking_year': ['Numeric year value', 'N/A'],
+              'percent_gg': ['Numeric percentage value', 'Not Assessed'],
+              'tumor_location_choice_rul': ['Checked', 'Unchecked'],
+              'tumor_location_choice_rml': ['Checked', 'Unchecked'],
+              'tumor_location_choice_rll': ['Checked', 'Unchecked'],
+              'tumor_location_choice_ul': ['Checked', 'Unchecked'],
+              'tumor_location_choice_lll': ['Checked', 'Unchecked'],
+              'tumor_location_choice_l_lingula': ['Checked', 'Unchecked'],
+              'tumor_location_choice_unknown': ['Checked', 'Unchecked'],
+              'histology': ['Adenocarcinoma', 'Squamous cell carcinoma', 'NSCLC NOS (not otherwise specified)'],
+              'pathological_t_stage': ['T1a', 'T1b', 'T2a', 'T2b', 'T3', 'T4', 'Tis'],
+              'pathological_n_stage': ['N0', 'N1', 'N2'],
+              'pathological_m_stage': ['M0', 'M1a', 'M1b'],
+              'histopathological_grade': ['G1 Well differentiated', 'G2 Moderately differentiated', 'G3 Poorly differentiated', 'Other'],
+              'lymphovascular_invasion': ['Absent', 'Present', 'Not Collected'],
+              'pleural_invasion': ['No', 'Yes', 'Not collected'],
+              'egfr_mutation_status': ['Wildtype', 'Mutant', 'Unknown', 'Not collected'],
+              'kras_mutation_status': ['Wildtype', 'Mutant', 'Unknown', 'Not collected'],
+              'alk_translocation_status': ['Wildtype', 'Translocated', 'Unknown', 'Not collected'],
+              'adjuvant_treatment': ['No', 'Yes', 'Not Collected'],
+              'chemotherapy': ['No', 'Yes', 'Not Collected'],
+              'radiation': ['No', 'Yes', 'Not Collected'],
+              'recurrence': ['no', 'yes', 'Not collected'],
+              'recurrence_location': ['distant', 'regional', 'local', 'N/A'],
+              'date_of_recurrence': ['Date in MM/DD/YY format'],
+              'date_of_last_known_alive': ['Date in MM/DD/YY format'],
+              'survival_status': ['Alive', 'Dead'],
+              'date_of_death': ['Date in MM/DD/YY format'],
+              'time_to_death_days': ['Numeric value of days'],
+              'ct_date': ['Date in MM/DD/YY format'],
+              'days_between_ct_and_surgery': ['Numeric value of days'],
+              'pet_date': ['Date in MM/DD/YY format', 'Not Collected']
+              }
+              prompt= f"""
+              Here is the schema <schema>{json.dumps(schema_dict)}</schema>
+              Here is the generated sql query
+              <sql>{sql}</sql>
+
+              Here is the question that was asked 
+              <question>{question}</question>
+              
+              <Instruction>Evaluate the SQL query to make sure it is very efficient. If it is not efficient then respond back with a more efficient sql query, or respond with "no change needed" if the query is good. your response should with <efficientQuery></efficientQuery> tags </Instruction>
+              <example>
+              question: What is the survival status for patients who has undergone chemotherapy
+              
+              
+              Inefficient SQL Query:
+              SELECT chemotherapy, survival_status \nFROM dev.public.lung_cancer_cases\nWHERE chemotherapy = 'Yes';
+              
+              Reason: This is inefficient because it does not provide a more concise and informative output that directly answers the question. It results in a larger output size, does not aggregate the data, and presents the results in a difficult format that is not easy to analyze and interpret.
+              
+              This query will give you the count of patients for each survival status (Alive or Dead) who have undergone chemotherapy.
+              
+              The main differences are:
+              
+              1. It only selects the `survival_status` column, since that's the information needed to answer the question. The `chemotherapy` column is not needed in the output.
+              
+              2. It uses `COUNT(*)` and `GROUP BY` to aggregate and count the records for each distinct value of `survival_status`. This allows you to see the number of patients for each survival status in a single result set, rather than having to count them manually from the output.
+              
+              By aggregating the data using `COUNT` and `GROUP BY`, you can get a more concise and informative result, making it easier to analyze the survival status distribution for patients who have undergone chemotherapy.
+              
+              
+              Efficient SQL Query:
+              
+              SELECT survival_status, COUNT(*) AS count
+              FROM dev.public.lung_cancer_cases
+              WHERE chemotherapy = 'Yes'
+              GROUP BY survival_status;
+              
+              Reason: 
+              This query will give you the count of patients for each survival status (Alive or Dead) who have undergone chemotherapy.
+              
+              The main differences are:
+              
+              1. It only selects the `survival_status` column, since that's the information needed to answer the question. The `chemotherapy` column is not needed in the output.
+              
+              2. It uses `COUNT(*)` and `GROUP BY` to aggregate and count the records for each distinct value of `survival_status`. This allows you to see the number of patients for each survival status in a single result set, rather than having to count them manually from the output.
+              
+              By aggregating the data using `COUNT` and `GROUP BY`, you can get a more concise and informative result, making it easier to analyze the survival status distribution for patients who have undergone chemotherapy.
+              
+          </example>
+          <outputrule>do not use next line characters in the generated sql</outputrule>
+              """
+              client = boto3.client('bedrock-runtime')
+              user_message= { "role": "user","content": prompt }
+              claude_response = {"role": "assistant", "content": "<efficientQuery>"}
+              model_Id='anthropic.claude-3-sonnet-20240229-v1:0'
+              messages = [user_message,claude_response]
+              system_prompt = "You are an extremly critical sql query evaluation assistant, your job is to look at the schema, sql query and question being asked to then evaluate the query to ensure it is efficient."
+              max_tokens=1000
+              
+              body=json.dumps(
+                      {
+                          "messages": messages,
+                          "anthropic_version": "bedrock-2023-05-31",
+                          "max_tokens": max_tokens,
+                          "system": system_prompt
+                        
+                      }  
+                  )  
+              
+              response = client.invoke_model(body=body,modelId=model_Id)
+              response_bytes = response.get("body").read()
+              response_text = response_bytes.decode('utf-8')
+              response_json = json.loads(response_text)
+              content = response_json.get('content', [])
+              for item in content:
+                  if item.get('type') == 'text':
+                      result_text = item.get('text')
+                      print(result_text)
+                      return result_text
+              
+              
+              return "No SQL found in response"
+
+
+          def get_schema():
+              #Schema retrieval is hardcoded temporarily but also to make agent faster
+              sql ="SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public';"
+              
+              try:
+                  result = redshift_client.execute_statement(Database='dev', DbUser='admin', Sql=sql, ClusterIdentifier='biomarker-redshift-cluster')
+                  print("SQL statement execution started. StatementId:", result['Id'])
+              
+                  def wait_for_query_completion(statement_id):
+                      while True:
+                          response = redshift_client.describe_statement(Id=statement_id)
+                          status = response['Status']
+                          if status == 'FINISHED':
+                              print("SQL statement execution completed.")
+                              break
+                          elif status in ['FAILED', 'CANCELLED']:
+                              print("SQL statement execution failed or was cancelled.")
+                              break
+                          print("Waiting for SQL statement execution to complete...")
+                          time.sleep(5)  # Wait for 5 seconds before checking the status again
+                  
+                  wait_for_query_completion(result['Id'])
+                  
+                  # Retrieve the SQL result
+                  response = redshift_client.get_statement_result(Id=result['Id'])
+                  return response
+              except Exception as e:
+                  print("Error:", e)
+
+          def query_redshift(query):
+              try:
+                  result = redshift_client.execute_statement(Database='dev', DbUser='admin', Sql=query, ClusterIdentifier='biomarker-redshift-cluster')
+                  print("SQL statement execution started. StatementId:", result['Id'])
+              
+                  def wait_for_query_completion(statement_id):
+                      while True:
+                          response = redshift_client.describe_statement(Id=statement_id)
+                          status = response['Status']
+                          if status == 'FINISHED':
+                              print("SQL statement execution completed.")
+                              break
+                          elif status in ['FAILED', 'CANCELLED']:
+                              print("SQL statement execution failed or was cancelled.")
+                              break
+                          print("Waiting for SQL statement execution to complete...")
+                          time.sleep(5)  # Wait for 5 seconds before checking the status again
+                  
+                  wait_for_query_completion(result['Id'])
+                  
+                  # Retrieve the SQL result
+                  response = redshift_client.get_statement_result(Id=result['Id'])
+                  return response
+              except Exception as e:
+                  print("Error:", e)
+
+          # Clean response to send to model
+          def extract_table_columns(query):
+              table_columns = defaultdict(list)
+
+              for record in query["Records"]:
+                  table_name = record[0]["stringValue"]
+                  column_name = record[1]["stringValue"]
+                  table_columns[table_name].append(column_name)
+              return dict(table_columns)
+
+          def lambda_handler(event, context):
+            
+              result = None
+              
+              if event['apiPath'] == "/getschema":
+                  raw_schema = get_schema()
+                  result = extract_table_columns(raw_schema)
+              
+              if event['apiPath'] == "/queryredshift":
+                  query = event['requestBody']['content']['application/json']['properties'][0]['value']
+                  result = query_redshift(query)
+
+              # Example: Print or return the result
+              if result:
+                  print("Query Result:", result)
+                
+              else:
+                  result="Query Failed."
+
+              
+              response_body = {
+              'application/json': {
+                  'body':str(result)
+              }
+          }
+    
+              action_response = {
+              'actionGroup': event['actionGroup'],
+              'apiPath': event['apiPath'],
+              'httpMethod': event['httpMethod'],
+              'httpStatusCode': 200,
+              'responseBody': response_body
+              }
+
+              session_attributes = event['sessionAttributes']
+              prompt_session_attributes = event['promptSessionAttributes']
+              
+              api_response = {
+                  'messageVersion': '1.0', 
+                  'response': action_response,
+                  'sessionAttributes': session_attributes,
+                  'promptSessionAttributes': prompt_session_attributes
+              }
+                  
+              return api_response
+
+
+  AgentLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonRedshiftDataFullAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: RedshiftAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - redshift:*
+                Resource:
+                  - !Sub arn:aws:redshift:${AWS::Region}:${AWS::AccountId}:*
+                  
+                  
+
+  AgentLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt AgentLambdaFunction.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt AgentResource.AgentArn
+
+
