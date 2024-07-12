@@ -8,11 +8,23 @@ Parameters:
   RedshiftPassword:
     Type: String
     NoEcho: true
-  S3Bucketname:
-    Type: String
-  S3datakey: 
-    Type: String
+    Default: 'MyPassword123'  # Remove this line for production use
+    Description: 'The password for the Redshift master user. Must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.'
+    MinLength: 8
+    MaxLength: 64
+    AllowedPattern: ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d!@#$%^&*()_+\-=\[\]{};:'",.<>?]{8,64}$
+    ConstraintDescription: 'Password must be between 8 and 64 characters, and contain at least one uppercase letter, one lowercase letter, and one number.'
 
+Mappings:
+  RegionMap:
+    us-east-1:
+      PandasLayer: 'arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python39:20'
+    us-east-2:
+      PandasLayer: 'arn:aws:lambda:us-east-2:336392948345:layer:AWSSDKPandas-Python39:20'
+    us-west-1:
+      PandasLayer: 'arn:aws:lambda:us-west-1:336392948345:layer:AWSSDKPandas-Python39:20'
+    us-west-2:
+      PandasLayer: 'arn:aws:lambda:us-west-2:336392948345:layer:AWSSDKPandas-Python39:20'
 
 Resources:
   # Redshift Cluster
@@ -54,7 +66,10 @@ Resources:
         PhysicalConnectionRequirements:
           SubnetId: !Ref Subnet1
           SecurityGroupIdList: [!Ref SecurityGroup]
-          AvailabilityZone: us-east-1a
+          AvailabilityZone: !Select 
+            - 0
+            - !GetAZs 
+              Ref: 'AWS::Region'
 
   # Security Group
   SecurityGroup:
@@ -91,7 +106,10 @@ Resources:
   Subnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: us-east-1a
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs 
+          Ref: 'AWS::Region'
       CidrBlock: 10.0.1.0/24
       VpcId: !Ref VPC
 
@@ -99,9 +117,205 @@ Resources:
   Subnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: us-east-1b
+      AvailabilityZone: !Select 
+        - 1
+        - !GetAZs 
+          Ref: 'AWS::Region'
       CidrBlock: 10.0.2.0/24
       VpcId: !Ref VPC
+
+  S3DataProcessingLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:CreateBucket'
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                Resource: '*'
+        - PolicyName: STSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:GetCallerIdentity'
+                Resource: '*'
+
+  S3DataProcessingLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt S3DataProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import pandas as pd
+          import gzip
+          import requests
+          import shutil
+          import os
+          import io
+          from io import StringIO
+          import urllib3
+
+          http = urllib3.PoolManager()
+
+          def send_response(event, context, response_status, response_data, physical_resource_id=None):
+              response_url = event['ResponseURL']
+
+              response_body = {
+                'Status': response_status,
+                'Reason': f"See the details in CloudWatch Log Stream: {context.log_stream_name}",
+                'PhysicalResourceId': physical_resource_id or context.log_stream_name,
+                'StackId': event['StackId'],
+                'RequestId': event['RequestId'],
+                'LogicalResourceId': event['LogicalResourceId'],
+                'Data': response_data
+              }
+
+              json_response_body = json.dumps(response_body)
+
+              headers = {
+                'content-type': '',
+                'content-length': str(len(json_response_body))
+              }
+
+              response = http.request('PUT', response_url, body=json_response_body, headers=headers)
+              return response.status
+
+          def lambda_handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      send_response(event, context, 'SUCCESS', {})
+                      return
+
+                  s3 = boto3.client('s3')
+                  session = boto3.session.Session()
+                  region = session.region_name
+                  accountID = boto3.client('sts').get_caller_identity().get('Account')
+
+                  setup_Bucket_Name = f'biomarkers-discovery-agent-test-{region}-{accountID}'
+                  solution_name = 'biomarkers'
+                  input_data_bucket = f"s3://{setup_Bucket_Name}/data/{solution_name}"
+                  SOLUTION_PREFIX = 'multi-modal'
+                  BUCKET = setup_Bucket_Name
+
+                  genomic_dataset_url = "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE103584&format=file&file=GSE103584%5FR01%5FNSCLC%5FRNAseq%2Etxt%2Egz"
+                  clinical_dataset_url = "https://www.cancerimagingarchive.net/wp-content/uploads/NSCLCR01Radiogenomic_DATA_LABELS_2018-05-22_1500-shifted.csv"
+                  genomic_dataset_name = "GSE103584_R01_NSCLC_RNAseq.txt"
+                  clinical_dataset_name = "NSCLCR01Radiogenomic_DATA_LABELS_2018-05-22_1500-shifted.csv"
+
+                  # Create S3 bucket for data
+                  try:
+                      if region != 'us-east-1':
+                          s3.create_bucket(Bucket=setup_Bucket_Name, CreateBucketConfiguration={
+                              'LocationConstraint': region})
+                      else:
+                          s3.create_bucket(Bucket=setup_Bucket_Name)
+                  except s3.exceptions.BucketAlreadyExists:
+                      print(f"Bucket {setup_Bucket_Name} already exists")
+                  except s3.exceptions.BucketAlreadyOwnedByYou:
+                      print(f"Bucket {setup_Bucket_Name} already owned by you")
+
+                  # Download and process genomic data
+                  genomic_response = requests.get(genomic_dataset_url)
+                  if genomic_response.status_code == 200:
+                      with gzip.open(io.BytesIO(genomic_response.content), 'rt') as f:
+                          gen_data = pd.read_csv(f, delimiter='\t')
+                      s3.put_object(Body=gen_data.to_csv(index=False, sep='\t'), Bucket=setup_Bucket_Name, Key=f'data/{solution_name}/genomics/{genomic_dataset_name}')
+                  else:
+                      raise Exception('Failed to download genomic data')
+
+                  # Download and process clinical data
+                  clinical_response = requests.get(clinical_dataset_url)
+                  if clinical_response.status_code == 200:
+                      data_clinical = pd.read_csv(StringIO(clinical_response.text))
+                      s3.put_object(Body=data_clinical.to_csv(index=False), Bucket=setup_Bucket_Name, Key=f'data/{solution_name}/clinical/{clinical_dataset_name}')
+                  else:
+                      raise Exception('Failed to download clinical data')
+
+                  # Process the data
+                  data_clinical = data_clinical[~data_clinical["Case ID"].str.contains("AMC")]
+
+                  list_delete_cols = ['Quit Smoking Year', 'Date of Recurrence', 'Date of Last Known Alive', 'Date of Death', 'CT Date', 'PET Date']
+                  data_clinical.drop(list_delete_cols, axis=1, inplace=True)
+
+                  data_clinical["Survival Status"].replace({"Dead": "1", "Alive": "0"}, inplace=True)
+
+                  data_clinical.fillna(0, inplace=True)
+
+                  drop_cases = ['R01-003', 'R01-004', 'R01-006', 'R01-007', 'R01-015', 'R01-016', 'R01-018', 'R01-022', 'R01-023', 'R01-098', 'R01-105']
+                  gen_data = gen_data.drop(drop_cases, axis=1)
+
+                  gen_data.rename(columns={'Unnamed: 0':'index_temp'}, inplace=True)
+                  gen_data.set_index('index_temp', inplace=True)
+                  gen_data_t = gen_data.transpose()
+                  gen_data_t.reset_index(inplace=True)
+                  gen_data_t.rename(columns={'index':'Case_ID'}, inplace=True)
+                  
+                  selected_columns = ['Case_ID','LRIG1', 'HPGD', 'GDF15', 'CDH2', 'POSTN', 'VCAN', 'PDGFRA', 'VCAM1', 'CD44', 'CD48', 'CD4', 'LYL1', 'SPI1', 'CD37', 'VIM', 'LMO2', 'EGR2', 'BGN', 'COL4A1', 'COL5A1', 'COL5A2']
+                  gen_data_t = gen_data_t[selected_columns]
+
+                  data_gen = gen_data_t.fillna(0)
+                  data_clinical = data_clinical.rename(columns={'Case ID': 'Case_ID'}) 
+                  data_clinical[['Time to Death (days)']] = data_clinical[['Time to Death (days)']].fillna(value=3000)
+                  inner_merged_total = pd.merge(data_gen, data_clinical, on=["Case_ID"])
+                  inner_merged_total['Survival duration'] = inner_merged_total['Age at Histological Diagnosis'] + inner_merged_total['Time to Death (days)']/365
+                  # Save the final result
+                  clinical_genomic_key = f'data/{solution_name}/clinical_genomic.csv'
+                  s3.put_object(Body=inner_merged_total.to_csv(index=False), Bucket=setup_Bucket_Name, Key=clinical_genomic_key)
+                  
+
+                  # Save the final result
+                  s3.put_object(Body=inner_merged_total.to_csv(index=False), Bucket=setup_Bucket_Name, Key=f'data/{solution_name}/clinical_genomic.csv')
+                  chemotherapy_cases = inner_merged_total[inner_merged_total['Chemotherapy'] == 'Yes'].copy()
+                  chemotherapy_cases.loc[chemotherapy_cases['LRIG1'] <= 25, 'ExpressionGroup'] = 0
+                  chemotherapy_cases.loc[chemotherapy_cases['LRIG1'] > 25, 'ExpressionGroup'] = 1
+                  
+                  chemotherapy_cases = chemotherapy_cases[['LRIG1', 'Survival Status', 'Survival duration', 'ExpressionGroup']]
+                  
+                  # Save chemotherapy survival data
+                  s3.put_object(Body=chemotherapy_cases.to_csv(index=False), Bucket=setup_Bucket_Name, Key=f'data/{solution_name}/chemotherapy_survival.csv')
+                  chemotherapy_survival_key = f'data/{solution_name}/chemotherapy_survival.csv'
+
+
+
+                  send_response(event, context, 'SUCCESS', {
+                  'BucketName': setup_Bucket_Name,
+                  'ClinicalGenomicKey': clinical_genomic_key,
+                  'ChemotherapySurvivalKey': chemotherapy_survival_key
+              })
+              except Exception as e:
+                  print(e)
+                  send_response(event, context, 'FAILED', {'Error': str(e)})
+
+      Runtime: python3.9
+      Timeout: 900
+      MemorySize: 3008
+      Layers:
+        - !FindInMap [RegionMap, !Ref 'AWS::Region', PandasLayer]
+
+  S3DataProcessingCustomResource:
+    Type: 'Custom::S3DataProcessing'
+    Properties:
+      ServiceToken: !GetAtt S3DataProcessingLambda.Arn
+  
 
   # Lambda Function to Load Data
   LambdaExecutionRole:
@@ -169,10 +383,7 @@ Resources:
           database = os.environ['REDSHIFT_DATABASE']
           cluster_id = os.environ['REDSHIFT_CLUSTER_ID']
           DbUser = os.environ['REDSHIFT_USER']
-          s3_bucket = os.environ['S3_BUCKET']
-
-          s3_key_clinical_genomic_data = "clinical_genomic.csv"
-          s3_key_chemotherapy_survival_data = "chemotherapy_survival.csv"
+         
 
 
           def send_response(event, context, response_status, response_data, physical_resource_id=None):
@@ -203,15 +414,15 @@ Resources:
             sql = f"""
               CREATE TABLE IF NOT EXISTS "dev"."public"."chemotherapy_survival" (
               LRIG1 FLOAT,
-              Survival_status BOOLEAN,
-              Time_to_death INT,
-              Expression_group BOOLEAN
+              Survival_Status INTEGER,
+              Survival_Duration FLOAT,
+              ExpressionGroup FLOAT
           );
 
-          COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".LRIG1 IS 'Gene expression value for LRIG1';
-          COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".Survival_Status IS 'Boolean 1 or 0 for Alive or Dead';
-          COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".Time_to_death IS 'Time to death in days, or 3000 if alive';
-          COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".Expression_group IS 'Boolean 1 or 0 if in expression group';
+              COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".LRIG1 IS 'Gene expression value for LRIG1';
+              COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".Survival_Status IS 'Integer 1 or 0 for Alive or Dead';
+              COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".Survival_Duration IS 'Survival duration in days';
+              COMMENT ON COLUMN "dev"."public"."chemotherapy_survival".ExpressionGroup IS 'Integer 1 or 0 for expression group';
             """
             response = redshift_data.execute_statement(
                 ClusterIdentifier=cluster_id,
@@ -222,8 +433,8 @@ Resources:
             return response
 
           def create_clinical_genomic_table(cluster_id, database, Dbuser):
-            sql = f"""
-              CREATE TABLE IF NOT EXISTS "dev"."public"."clinical_genomic" (
+            sql = """
+            CREATE TABLE IF NOT EXISTS "dev"."public"."clinical_genomic"(
               Case_ID VARCHAR(50),
               LRIG1 FLOAT,
               HPGD FLOAT,
@@ -276,12 +487,12 @@ Resources:
               Radiation VARCHAR(20),
               Recurrence VARCHAR(20),
               Recurrence_Location VARCHAR(50),
-              Date_of_Recurrence DATE,
-              Date_of_Last_Known_Alive DATE,
               Survival_Status VARCHAR(30),
-              Date_of_Death DATE,
               Time_to_Death FLOAT,
-              Days_between_CT_and_surgery INT
+              Days_between_CT_and_surgery INT,
+              Survival_Duration FLOAT
+              
+              
             );
 
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Case_ID IS 'Unique identifier for each case';
@@ -336,19 +547,19 @@ Resources:
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Radiation IS 'Yes or No';
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Recurrence IS 'Yes or No';
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Recurrence_Location IS 'Local, Distant, or N/A';
-              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Date_of_Recurrence IS 'Date of recurrence, or 1900-01-01 if no recurrence';
-              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Date_of_Last_Known_Alive IS 'Date of last known alive, or N/A if deceased';
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Survival_Status IS 'Alive or Dead';
-              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Date_of_Death IS 'Date of death, or 1900-01-01 if alive';
-              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Time_to_Death IS 'Time to death in days, or 3000 if alive';
+              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Time_to_Death IS 'Time to death in days, or 0 if alive';
               COMMENT ON COLUMN "dev"."public"."clinical_genomic".Days_between_CT_and_surgery IS 'Number of days between CT scan and surgery';
+              COMMENT ON COLUMN "dev"."public"."clinical_genomic".Survival_Duration IS 'duration of paitent survial';
             """
+            
             response = redshift_data.execute_statement(
                 ClusterIdentifier=cluster_id,
                 Database=database,
                 DbUser=Dbuser,
                 Sql=sql
             )
+            print("data loaded")
             return response
 
           def load_chemotherapy_data(cluster_id, database, Dbuser, df):
@@ -357,9 +568,9 @@ Resources:
               sql = f"""
               INSERT INTO "dev"."public"."chemotherapy_survival" (
                 LRIG1,
-                Survival_status,
-                Time_to_death,
-                Expression_group)
+                Survival_Status,
+                Survival_Duration,
+                ExpressionGroup)
                 VALUES ('{row[1]}', '{row[2]}', '{row[3]}', '{row[4]}');"""
                 
               response = redshift_data.execute_statement(
@@ -382,7 +593,6 @@ Resources:
           def load_clinical_genomic_data(cluster_id, database, Dbuser, df):
             
             for row in df.itertuples():
-              
               sql = f"""INSERT INTO "dev"."public"."clinical_genomic" (
               Case_ID, LRIG1, HPGD, GDF15, CDH2, POSTN, VCAN,
               PDGFRA, VCAM1, CD44, CD48, CD4, LYL1, SPI1, CD37,
@@ -398,21 +608,12 @@ Resources:
               Lymphovascular_invasion, Pleural_invasion,
               EGFR_mutation_status, KRAS_mutation_status,
               ALK_translocation_status, Adjuvant_Treatment, Chemotherapy,
-              Radiation, Recurrence, Recurrence_Location, Date_of_Recurrence,
-              Date_of_Last_Known_Alive, Survival_Status, Date_of_Death, Time_to_Death,
-              Days_between_CT_and_surgery)
+              Radiation, Recurrence, Recurrence_Location,
+              Survival_Status, Time_to_Death,
+              Days_between_CT_and_surgery, Survival_Duration)
               VALUES (
-              '{row[1]}', '{row[2]}', '{row[3]}', '{row[4]}',
-              '{row[5]}', '{row[6]}', '{row[7]}', '{row[8]}', '{row[9]}', 
-              '{row[10]}', '{row[11]}','{row[12]}', '{row[13]}', '{row[14]}', '{row[15]}',
-              '{row[16]}', '{row[17]}', '{row[18]}', '{row[19]}', '{row[20]}', '{row[21]}', '{row[22]}'
-              ,'{row[23]}', '{row[24]}', '{row[25]}', '{row[26]}', '{row[27]}'
-              ,'{row[28]}', '{row[29]}', '{row[30]}', '{row[31]}', '{row[32]}','{row[33]}', 
-              '{row[34]}', '{row[35]}', '{row[36]}','{row[37]}', '{row[38]}', '{row[39]}', '{row[40]}',
-              '{row[41]}', '{row[42]}', '{row[43]}', '{row[44]}'
-              ,'{row[45]}', '{row[46]}', '{row[47]}', '{row[48]}', '{row[49]}',
-              '{row[50]}', '{row[51]}', '{row[52]}', '{row[53]}', '{row[54]}'
-              ,'{row[55]}', '{row[56]}', '{row[57]}','{row[58]}');"""
+              {','.join([f"'{row[i]}'" for i in range(1, len(row))])});"""
+              print(sql)
                 
               response = redshift_data.execute_statement(
                     ClusterIdentifier=cluster_id,
@@ -428,40 +629,41 @@ Resources:
             if 'Error' in response:
                 print("Error:", response['Error'])
             return response
-            
-
-
-
+          
           def lambda_handler(event, context):
             try:
                 if event['RequestType'] == 'Delete':
                     send_response(event, context, 'SUCCESS', {})
                     return
+    
+                s3_bucket = event['ResourceProperties']['S3Bucket']
+                s3_key_clinical_genomic_data = event['ResourceProperties']['ClinicalGenomicKey']
+                s3_key_chemotherapy_survival_data = event['ResourceProperties']['ChemotherapySurvivalKey']
             
-              #Create chemotherapy table
-                create_chemotherapy_survival_table(cluster_id, database, Dbuser)
+                #Create chemotherapy table
+                create_chemotherapy_survival_table(cluster_id, database, DbUser)
                 time.sleep(5)
                 
                 #download data
                 with open('/tmp/chemotherapy_survival.csv', 'wb') as file:
-                  s3_client.download_fileobj(s3_bucket, s3_key_chemotherapy_survival_data, file)
+                    s3_client.download_fileobj(s3_bucket, s3_key_chemotherapy_survival_data, file)
                 chemotherapy_df = pd.read_csv('/tmp/chemotherapy_survival.csv')
                 
-              #Load chemotherapy data to table
-                load_chemotherapy_data(cluster_id, database, Dbuser, chemotherapy_df)
+                #Load chemotherapy data to table
+                load_chemotherapy_data(cluster_id, database, DbUser, chemotherapy_df)
                 time.sleep(5)
               
                 #Create clinical genomic table
-                create_clinical_genomic_table(cluster_id, database, Dbuser)
+                create_clinical_genomic_table(cluster_id, database, DbUser)
                 time.sleep(5)
                 
                 #download data
                 with open('/tmp/clinical_genomic.csv', 'wb') as file:
-                  s3_client.download_fileobj(s3_bucket, s3_key_clinical_genomic_data, file)
+                    s3_client.download_fileobj(s3_bucket, s3_key_clinical_genomic_data, file)
                 clinical_df = pd.read_csv('/tmp/clinical_genomic.csv')
                 
                 # Load clinical genomic data to table
-                load_clinical_genomic_data(cluster_id, database, Dbuser, clinical_df)
+                load_clinical_genomic_data(cluster_id, database, DbUser, clinical_df)
                 time.sleep(5)
 
                 send_response(event, context, 'SUCCESS', {'Status': 'Success'})
@@ -469,16 +671,13 @@ Resources:
             except Exception as e:
                 send_response(event, context, 'FAILED', {'Status': 'Failure', 'Error': str(e)})
                 print(e)
-
       Runtime: 'python3.9'
       Timeout: 900 
       MemorySize: 512
       Layers:
-      - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python39:20
+        - !FindInMap [RegionMap, !Ref 'AWS::Region', PandasLayer]
       Environment:
         Variables:
-          S3_BUCKET: !Ref S3Bucketname
-          S3_KEY: !Ref S3datakey
           REDSHIFT_CLUSTER_ID: 'biomarker-redshift-cluster'
           REDSHIFT_DATABASE: !Ref RedshiftDatabaseName
           REDSHIFT_USER: 'admin'
@@ -492,15 +691,17 @@ Resources:
 
   # Custom Resource to Load Data to Redshift
   LoadDataToRedshift:
-    DependsOn: RedshiftCluster
+    DependsOn: 
+      - RedshiftCluster
+      - S3DataProcessingCustomResource
     Type: Custom::LoadDataToRedshift
     Properties:
       ServiceToken: !GetAtt LambdaFunction.Arn
+      S3Bucket: !GetAtt S3DataProcessingCustomResource.BucketName
+      ClinicalGenomicKey: !GetAtt S3DataProcessingCustomResource.ClinicalGenomicKey
+      ChemotherapySurvivalKey: !GetAtt S3DataProcessingCustomResource.ChemotherapySurvivalKey
  
 Outputs:
   RedshiftClusterEndpoint:
     Description: Redshift Cluster Endpoint
     Value: !GetAtt RedshiftCluster.Endpoint.Address
-  LambdaFunctionArn:
-    Description: ARN of the Lambda function
-    Value: !GetAtt LambdaFunction.Arn

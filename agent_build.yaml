@@ -235,50 +235,10 @@ Resources:
           redshift_client = boto3.client('redshift-data')
 
           def evaluatesql(sql,question):
-              schema_dict = {
-              'case_id': ['Unique case identifier'],
-              'patient_affiliation': ['Stanford, VA'],
-              'age_at_histological_diagnosis': ['Numeric age value'],
-              'weight': ['Numeric weight value, Not Collected'],
-              'gender': ['Male, Female'],
-              'ethnicity': ['Not Recorded In Database', 'Caucasian', 'Asian', 'Native Hawaiian/Pacific Islander', 'African-American', 'Hispanic/Latino'],
-              'smoking_status': ['Nonsmoker', 'Former', 'Current'],
-              'pack_years': ['Numeric pack year value', 'N/A'],
-              'quit_smoking_year': ['Numeric year value', 'N/A'],
-              'percent_gg': ['Numeric percentage value', 'Not Assessed'],
-              'tumor_location_choice_rul': ['Checked', 'Unchecked'],
-              'tumor_location_choice_rml': ['Checked', 'Unchecked'],
-              'tumor_location_choice_rll': ['Checked', 'Unchecked'],
-              'tumor_location_choice_ul': ['Checked', 'Unchecked'],
-              'tumor_location_choice_lll': ['Checked', 'Unchecked'],
-              'tumor_location_choice_l_lingula': ['Checked', 'Unchecked'],
-              'tumor_location_choice_unknown': ['Checked', 'Unchecked'],
-              'histology': ['Adenocarcinoma', 'Squamous cell carcinoma', 'NSCLC NOS (not otherwise specified)'],
-              'pathological_t_stage': ['T1a', 'T1b', 'T2a', 'T2b', 'T3', 'T4', 'Tis'],
-              'pathological_n_stage': ['N0', 'N1', 'N2'],
-              'pathological_m_stage': ['M0', 'M1a', 'M1b'],
-              'histopathological_grade': ['G1 Well differentiated', 'G2 Moderately differentiated', 'G3 Poorly differentiated', 'Other'],
-              'lymphovascular_invasion': ['Absent', 'Present', 'Not Collected'],
-              'pleural_invasion': ['No', 'Yes', 'Not collected'],
-              'egfr_mutation_status': ['Wildtype', 'Mutant', 'Unknown', 'Not collected'],
-              'kras_mutation_status': ['Wildtype', 'Mutant', 'Unknown', 'Not collected'],
-              'alk_translocation_status': ['Wildtype', 'Translocated', 'Unknown', 'Not collected'],
-              'adjuvant_treatment': ['No', 'Yes', 'Not Collected'],
-              'chemotherapy': ['No', 'Yes', 'Not Collected'],
-              'radiation': ['No', 'Yes', 'Not Collected'],
-              'recurrence': ['no', 'yes', 'Not collected'],
-              'recurrence_location': ['distant', 'regional', 'local', 'N/A'],
-              'date_of_recurrence': ['Date in MM/DD/YY format'],
-              'date_of_last_known_alive': ['Date in MM/DD/YY format'],
-              'survival_status': ['Alive', 'Dead'],
-              'date_of_death': ['Date in MM/DD/YY format'],
-              'time_to_death_days': ['Numeric value of days'],
-              'ct_date': ['Date in MM/DD/YY format'],
-              'days_between_ct_and_surgery': ['Numeric value of days'],
-              'pet_date': ['Date in MM/DD/YY format', 'Not Collected']
-              }
+              schema = get_schema()
+              
               prompt= f"""
-              Here is the schema <schema>{json.dumps(schema_dict)}</schema>
+              Here is the schema <schema>{json.dumps(schema)}</schema>
               Here is the generated sql query
               <sql>{sql}</sql>
 
@@ -362,7 +322,30 @@ Resources:
 
           def get_schema():
               #Schema retrieval is hardcoded temporarily but also to make agent faster
-              sql ="SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public';"
+              sql ="""
+                    SELECT
+                        'clinical_genomic' AS table_name,
+                        a.attname AS column_name,
+                        pg_catalog.format_type(a.atttypid, a.atttypmod) AS column_type,
+                        pg_catalog.col_description(a.attrelid, a.attnum) AS column_comment
+                    FROM
+                        pg_catalog.pg_attribute a
+                    WHERE
+                        a.attrelid = 'clinical_genomic'::regclass
+                        AND a.attnum > 0
+                        AND NOT a.attisdropped
+                    UNION ALL
+                    SELECT
+                        'chemotherapy_survival' AS table_name,
+                        a.attname AS column_name,
+                        pg_catalog.format_type(a.atttypid, a.atttypmod) AS column_type,
+                        pg_catalog.col_description(a.attrelid, a.attnum) AS column_comment
+                    FROM
+                        pg_catalog.pg_attribute a
+                    WHERE
+                        a.attrelid = 'chemotherapy_survival'::regclass
+                        AND a.attnum > 0
+                        AND NOT a.attisdropped;"""
               
               try:
                   result = redshift_client.execute_statement(Database='dev', DbUser='admin', Sql=sql, ClusterIdentifier='biomarker-redshift-cluster')
