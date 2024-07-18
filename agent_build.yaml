@@ -10,6 +10,9 @@ Parameters:
     Type: String
     Description: The name of the agent environment, used to differenciate agent application.
     Default: Medical-Research-Assistant
+  S3Bucket:
+    Type: String
+    Decription: S3 Bucket to store agent artifacts 
 
 
 Resources:
@@ -20,13 +23,20 @@ Resources:
       AgentResourceRoleArn: !GetAtt AgentRole.Arn
       AutoPrepare : True
       FoundationModel: !Ref BedrockModelId
-      Instruction: "You are a medical research assistant that generates SQL queries against a database containing medical
-       biomarker information. Before executing any SQL query, you should first evaluate its efficiency and correctness by 
-       calling the `/evaluatesql` API with the proposed SQL query and the related question. This API will analyze the query 
-       and return an evaluated or optimized version if needed. Only after receiving the evaluated query from this API should you 
-       proceed to execute the query by calling the `/queryredshift` API. Additionally, you can look up the schema of the database 
-       tables by calling the `/getschema` API to ensure your queries are correctly formatted and targeting the appropriate columns. 
-       Please remove all next line ("\n") characters from the sql queries."
+      Instruction: "You are a medical research assistant that generates SQL queries against a database containing medical biomarker information. 
+       Before executing any SQL query, you should first evaluate its efficiency and correctness by calling the `/refineesql` API 
+       with the proposed SQL query and the related question. This API will analyze the query and return an evaluated or optimized 
+       version if needed. Only after receiving the evaluated query from this API should you proceed to execute the query by calling the 
+       `/queryredshift` API. Additionally, you can look up the schema of the database tables by calling the `/getschema` API to ensure 
+       your queries are correctly formatted and targeting the appropriate columns. Please remove all next line ("\n") characters from 
+       the sql queries. You can plot a Kaplan Meier graph by calling the '/plot_kaplan_meier' API. In order to plot a Kaplan Meier 
+       graph for chemotherapy patients, you can query the chemotherapy survival table. To invoke the '/plot_kaplan_meier' API, you 
+       can generate the parameter values yourself by mapping survival status as the event parameter, time to death(days) as the 
+       duration parameter, and expression group with value 0 as the filter value for baseline parameter and expression group with 
+       value 1 as the filter value for condition parameter.  You can identify a best performing biomarker based on the p-value 
+       summary after fitting a survival regression model with  '/fit_survival_regression' API. In order to fit a survival 
+       regression model, you first query the table for all the records that include survival status and duration and all 
+       the required biomarkers."
       Description: "Agent for querying biomaker database."
       ActionGroups:
         - ActionGroupName: sqlActionGroup
@@ -122,7 +132,7 @@ Resources:
                               }
                           }
                       },
-                      "/evaluatesql": {
+                      "/refineesql": {
                           "post": {
                             "summary": "Evaluate SQL query efficiency",
                             "description": "Evaluate the efficiency of an SQL query based on the provided schema, query, and question.",
@@ -227,6 +237,10 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt AgentLambdaRole.Arn
       Timeout: 900
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref S3Bucket
+
       Code:
         ZipFile: |
           import boto3
@@ -234,7 +248,7 @@ Resources:
           from collections import defaultdict
           redshift_client = boto3.client('redshift-data')
 
-          def evaluatesql(sql,question):
+          def refineSQL(sql,question):
               schema = get_schema()
               
               prompt= f"""
@@ -245,7 +259,7 @@ Resources:
               Here is the question that was asked 
               <question>{question}</question>
               
-              <Instruction>Evaluate the SQL query to make sure it is very efficient. If it is not efficient then respond back with a more efficient sql query, or respond with "no change needed" if the query is good. your response should with <efficientQuery></efficientQuery> tags </Instruction>
+              <Instruction>Evaluate and refine the SQL query to make sure it is very efficient. If it is not efficient then respond back with a more efficient sql query, or respond with "no change needed" if the query is good. your response should with <efficientQuery></efficientQuery> tags </Instruction>
               <example>
               question: What is the survival status for patients who has undergone chemotherapy
               
@@ -408,6 +422,15 @@ Resources:
                   table_columns[table_name].append(column_name)
               return dict(table_columns)
 
+          # Upload result to S3 
+          def upload_result_s3(result, bucket, key):
+              s3 = boto3.resource('s3')
+              s3object = s3.Object(bucket, key)
+              s3object.put(
+              Body=(bytes(json.dumps(result).encode('UTF-8')))
+              )
+              return(s3object)
+
           def lambda_handler(event, context):
             
               result = None
@@ -415,6 +438,11 @@ Resources:
               if event['apiPath'] == "/getschema":
                   raw_schema = get_schema()
                   result = extract_table_columns(raw_schema)
+
+              if event['apiPath'] == "/refineesql":
+                  question = event['requestBody']['content']['application/json']['properties'][0]['value']
+                  sql = event['requestBody']['content']['application/json']['properties'][1]['value']
+                  result = refineSQL(question, sql)
               
               if event['apiPath'] == "/queryredshift":
                   query = event['requestBody']['content']['application/json']['properties'][0]['value']
@@ -426,6 +454,15 @@ Resources:
                 
               else:
                   result="Query Failed."
+
+              #Upload result to S3 if response size is too large
+              BUCKET_NAME='biomarkers-discovery-agent-us-east-1-942514891246'
+              KEY= str(uuid.uuid4()) + '.json'
+              size = sys.getsizeof(str(result))
+              print(size)
+              if size > 20000:
+                  print('size greater than 20KB, hence writing to a file in S3')
+                  result = upload_result_s3(result, BUCKET_NAME, KEY)
 
               
               response_body = {

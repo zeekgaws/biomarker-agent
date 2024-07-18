@@ -14,6 +14,10 @@ Parameters:
     MaxLength: 64
     AllowedPattern: ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d!@#$%^&*()_+\-=\[\]{};:'",.<>?]{8,64}$
     ConstraintDescription: 'Password must be between 8 and 64 characters, and contain at least one uppercase letter, one lowercase letter, and one number.'
+  GithubLink:
+   Type: String
+   Description: 'The link to the agent build cloudformation stack'
+
 
 Mappings:
   RegionMap:
@@ -700,6 +704,17 @@ Resources:
       S3Bucket: !GetAtt S3DataProcessingCustomResource.BucketName
       ClinicalGenomicKey: !GetAtt S3DataProcessingCustomResource.ClinicalGenomicKey
       ChemotherapySurvivalKey: !GetAtt S3DataProcessingCustomResource.ChemotherapySurvivalKey
+  
+  AgentBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Ref GithubLink
+      Parameters:
+        BedrockModelId: anthropic.claude-3-sonnet-20240229-v1:0
+        EnvironmentName: Medical-Research-Assistant
+        S3Bucket: !Ref S3DataProcessingCustomResource.BucketName
+    DependsOn:
+      - LoadDataToRedshift
  
 Outputs:
   RedshiftClusterEndpoint:
