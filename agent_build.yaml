@@ -10,12 +10,374 @@ Parameters:
     Type: String
     Description: The name of the agent environment, used to differenciate agent application.
     Default: Medical-Research-Assistant
-  S3Bucket:
+  GitRepoURL:
     Type: String
-    Decription: S3 Bucket to store agent artifacts 
+    Default: https://github.com/zeekgaws/biomarker-agent
+    Description: Git repository URL where the code files are stored
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Tag for the Docker image
 
 
 Resources:
+  # Create ECR repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    # DependsOn: CleanupCustomResource
+    Properties:
+      RepositoryName: lifelines-lambda-sample
+
+  EnsureECRImagePushed:
+    Type: Custom::EnsureECRImagePushed
+    DependsOn: 
+      - TriggerBuildCustomResource
+    Properties:
+      ServiceToken: !GetAtt TriggerBuildLambda.Arn
+      ECRRepository: !Ref ECRRepository
+      ImageTag: !Ref ImageTag
+      
+
+  CleanupLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt CleanupLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          
+          def handler(event, context):
+            if event['RequestType'] == 'Delete':
+              try:
+                # Clean up ECR
+                ecr = boto3.client('ecr')
+                repository_name = event['ResourceProperties']['ECRRepositoryName']
+                images = ecr.list_images(repositoryName=repository_name)
+                if images['imageIds']:
+                  ecr.batch_delete_image(
+                    repositoryName=repository_name,
+                    imageIds=images['imageIds']
+                  )
+                
+                # Clean up S3
+                s3 = boto3.resource('s3')
+                bucket = s3.Bucket(event['ResourceProperties']['S3BucketName'])
+                bucket.objects.all().delete()
+                
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                print(e)
+                cfnresponse.send(event, context, cfnresponse.FAILED, {})
+            else:
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+      Runtime: python3.8
+      Timeout: 300
+
+  CleanupLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CleanupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                  - 's3:DeleteObject'
+                  - 'ecr:ListImages'
+                  - 'ecr:BatchDeleteImage'
+                Resource: '*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  CleanupCustomResource:
+    Type: Custom::Cleanup
+    DependsOn: 
+      - S3Bucket
+      - ECRRepository
+    Properties:
+      ServiceToken: !GetAtt CleanupLambdaFunction.Arn
+      ECRRepositoryName: !Ref ECRRepository
+      S3BucketName: !Ref S3Bucket
+  
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 
+        Fn::Sub:
+          - '${BucketPrefix}-${StackIdPart}'
+          - BucketPrefix: '${EnvironmentName}'
+            StackIdPart: 
+              !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Create CloudWatch Log Group
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}-DockerPushProject'
+      RetentionInDays: 14
+
+  # Log into ECR and push Docker image
+  DockerPushLogic:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: DockerPushProject
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref S3Bucket
+        Name: pubmed-lambda-function.zip
+        NamespaceType: NONE
+        Packaging: ZIP
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        PrivilegedMode: true
+      Source:
+        Type: GITHUB
+        Location: !Ref GitRepoURL
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "Starting pre_build phase"
+                - echo "Logging into Amazon ECR..."
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                - echo "ECR login complete"
+            build:
+              commands:
+                - echo "Starting build phase"
+                - echo "Cloning Git repository..."
+                - git clone ${GitRepoURL}
+                - cd biomarker-agent/scientific-plots-with-lifelines
+                - echo "Building Docker image..."
+                - docker build -t lifelines-python3.12-v2 .
+                - echo "Tagging Docker image..."
+                - docker tag lifelines-python3.12-v2:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
+                - echo "Docker image tagged"
+                - cd ../..
+                - echo "Copying pre-zipped Lambda function..."
+                - cp biomarker-agent/pubmed-lambda-function.zip ./
+                - echo "Lambda function zip copied"
+            post_build:
+              commands:
+                - echo "Starting post_build phase"
+                - echo "Pushing Docker image to ECR..."
+                - docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
+                - echo "Docker image pushed to ECR"
+                - echo "Displaying Docker images"
+                - docker images
+                - echo "Displaying ECR repository contents"
+                - aws ecr list-images --repository-name ${ECRRepository}
+          artifacts:
+            files:
+              - pubmed-lambda-function.zip
+      TimeoutInMinutes: 10
+
+  # IAM role for CodeBuild
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Resource: '*'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+              - Effect: Allow
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${AWS::AccountId}-codepipeline-${AWS::Region}'
+                  - !Sub 'arn:aws:s3:::${AWS::AccountId}-codepipeline-${AWS::Region}/*'
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                  - 's3:PutObject'
+              - Effect: Allow
+                Resource: '*'
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource: 
+                  - !GetAtt S3Bucket.Arn
+                  - !Sub "${S3Bucket.Arn}/*"
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: '*'
+
+  TriggerBuildLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt TriggerBuildLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import time
+
+          def handler(event, context):
+              if event['RequestType'] in ['Create', 'Update']:
+                  try:
+                      codebuild = boto3.client('codebuild')
+                      ecr = boto3.client('ecr')
+                      
+                      if 'ProjectName' in event['ResourceProperties']:
+                          # This is for TriggerBuildCustomResource
+                          project_name = event['ResourceProperties']['ProjectName']
+                          response = codebuild.start_build(projectName=project_name)
+                          build_id = response['build']['id']
+                          print(f"Build started: {build_id}")
+                          
+                          # Wait for build to complete
+                          while True:
+                              build_status = codebuild.batch_get_builds(ids=[build_id])['builds'][0]['buildStatus']
+                              if build_status == 'SUCCEEDED':
+                                  print("Build completed successfully")
+                                  break
+                              elif build_status in ['FAILED', 'STOPPED', 'TIMED_OUT']:
+                                  print(f"Build failed with status: {build_status}")
+                                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": f"Build failed with status: {build_status}"})
+                                  return
+                              time.sleep(10)  # Wait for 10 seconds before checking again
+                          
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
+                          
+                      elif 'ECRRepository' in event['ResourceProperties']:
+                          # This is for EnsureECRImagePushed
+                          repository_name = event['ResourceProperties']['ECRRepository']
+                          image_tag = event['ResourceProperties']['ImageTag']
+                          
+                          # Wait for image to be available in ECR
+                          max_attempts = 30  # Maximum number of attempts
+                          for attempt in range(max_attempts):
+                              try:
+                                  ecr.describe_images(repositoryName=repository_name, imageIds=[{'imageTag': image_tag}])
+                                  print(f"Image {repository_name}:{image_tag} exists in ECR")
+                                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                                  return
+                              except ecr.exceptions.ImageNotFoundException:
+                                  if attempt == max_attempts - 1:
+                                      print(f"Image {repository_name}:{image_tag} not found in ECR after {max_attempts} attempts")
+                                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": "Image not found in ECR after maximum attempts"})
+                                      return
+                                  time.sleep(10)  # Wait for 10 seconds before trying again
+                      else:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": "Invalid ResourceProperties"})
+                  except Exception as e:
+                      print(f"Error: {str(e)}")
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+              else:
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+      Runtime: python3.8
+      Timeout: 900
+
+  TriggerBuildLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildStartBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt DockerPushLogic.Arn
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+        - PolicyName: ECRDescribeImagesPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:DescribeImages
+                Resource: '*'
+  
+  
+  TriggerBuildCustomResource:
+    Type: Custom::TriggerBuild
+    DependsOn: DockerPushLogic
+    Properties:
+      ServiceToken: !GetAtt TriggerBuildLambda.Arn
+      ProjectName: !Ref DockerPushLogic
+
+
   AgentResource:
     Type: AWS::Bedrock::Agent
     Properties:
@@ -23,20 +385,21 @@ Resources:
       AgentResourceRoleArn: !GetAtt AgentRole.Arn
       AutoPrepare : True
       FoundationModel: !Ref BedrockModelId
-      Instruction: "You are a medical research assistant that generates SQL queries against a database containing medical biomarker information. 
-       Before executing any SQL query, you should first evaluate its efficiency and correctness by calling the `/refineesql` API 
-       with the proposed SQL query and the related question. This API will analyze the query and return an evaluated or optimized 
-       version if needed. Only after receiving the evaluated query from this API should you proceed to execute the query by calling the 
-       `/queryredshift` API. Additionally, you can look up the schema of the database tables by calling the `/getschema` API to ensure 
-       your queries are correctly formatted and targeting the appropriate columns. Please remove all next line ("\n") characters from 
-       the sql queries. You can plot a Kaplan Meier graph by calling the '/plot_kaplan_meier' API. In order to plot a Kaplan Meier 
-       graph for chemotherapy patients, you can query the chemotherapy survival table. To invoke the '/plot_kaplan_meier' API, you 
-       can generate the parameter values yourself by mapping survival status as the event parameter, time to death(days) as the 
-       duration parameter, and expression group with value 0 as the filter value for baseline parameter and expression group with 
-       value 1 as the filter value for condition parameter.  You can identify a best performing biomarker based on the p-value 
-       summary after fitting a survival regression model with  '/fit_survival_regression' API. In order to fit a survival 
-       regression model, you first query the table for all the records that include survival status and duration and all 
-       the required biomarkers."
+      Instruction: |
+        You are a medical research assistant that generates SQL queries against a database containing medical biomarker information. 
+        Before executing any SQL query, you should first evaluate its efficiency and correctness by calling the `/refineesql` API 
+        with the proposed SQL query and the related question. This API will analyze the query and return an evaluated or optimized 
+        version if needed. Only after receiving the evaluated query from this API should you proceed to execute the query by calling the 
+        `/queryredshift` API. Additionally, you can look up the schema of the database tables by calling the `/getschema` API to ensure 
+        your queries are correctly formatted and targeting the appropriate columns. Please remove all next line ("\n") characters from 
+        the sql queries. You can plot a Kaplan Meier graph by calling the '/plot_kaplan_meier' API. In order to plot a Kaplan Meier 
+        graph for chemotherapy patients, you can query the chemotherapy survival table. To invoke the '/plot_kaplan_meier' API, you 
+        can generate the parameter values yourself by mapping survival status as the event parameter, time to death(days) as the 
+        duration parameter, and expression group with value 0 as the filter value for baseline parameter and expression group with 
+        value 1 as the filter value for condition parameter.  You can identify a best performing biomarker based on the p-value 
+        summary after fitting a survival regression model with  '/fit_survival_regression' API. In order to fit a survival 
+        regression model, you first query the table for all the records that include survival status and duration and all 
+        the required biomarkers.
       Description: "Agent for querying biomaker database."
       ActionGroups:
         - ActionGroupName: sqlActionGroup
@@ -186,6 +549,144 @@ Resources:
                         }
                       }
                     }
+        - ActionGroupName: scientificAnalysisActionGroup
+          Description: Actions for scientific analysis with lifelines library 
+          ActionGroupExecutor: 
+            Lambda: !GetAtt ScientificPlotLambdaFunction.Arn
+          ApiSchema:
+            Payload: |
+              {
+                "openapi": "3.0.0",
+                "info": {
+                  "title": "Plot Kaplan Meier",
+                  "version": "1.0.0"
+                },
+                "paths": {
+                  "/plot_kaplan_meier": {
+                    "post": {
+                      "summary": "Plot Kaplan Meier Curve",
+                      "description": "Generate a Kaplan-Meier survival curve plot based on provided biomarker and survival data.",
+                      "requestBody": {
+                        "required": true,
+                        "content": {
+                          "application/json": {
+                            "schema": {
+                              "type": "object",
+                              "required": ["biomarker_name", "duration_baseline", "duration_condition", "event_baseline", "event_condition"],
+                              "properties": {
+                                "biomarker_name": {
+                                  "type": "string",
+                                  "description": "name of the biomarker"
+                                },
+                                "duration_baseline": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "number"
+                                  },
+                                  "description": "duration in number of days for baseline"
+                                },
+                                "duration_condition": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "number"
+                                  },
+                                  "description": "duration in number of days for condition"
+                                },
+                                "event_baseline": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "boolean"
+                                  },
+                                  "description": "survival event for baseline"
+                                },
+                                "event_condition": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "boolean"
+                                  },
+                                  "description": "survival event for condition"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "responses": {
+                        "200": {
+                          "description": "Successful response",
+                          "content": {
+                            "image/png": {
+                              "schema": {
+                                "type": "string",
+                                "format": "binary"
+                              }
+                            }
+                          }
+                        },
+                        "400": {
+                          "description": "Bad request"
+                        },
+                        "500": {
+                          "description": "Internal server error"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+        - ActionGroupName: queryPubMed
+          Description: Actions for fetching biomedical literature from PubMed
+          ActionGroupExecutor: 
+            Lambda: !GetAtt QueryPubMedLambdaFunction.Arn
+          ApiSchema:
+            Payload: |
+                {
+                    "openapi": "3.0.0",
+                    "info": {
+                        "title": "fetch biomedical literature",
+                        "version": "1.0.0",
+                        "description": "PubMed API to help answer users question using abstracts from biomedical literature."
+                    },
+                    "paths": {
+                        "/query-pubmed": {
+                            "post": {
+                                "summary": "Query pubmed to relevant information from abstracts of biomedical articles.",
+                                "description": "Query pubmed to relevant information from abstracts of biomedical articles. The PubMed API takes in the user query then returns the abstracts of top 5 relevant articles.",
+                                "operationId": "query-pubmed",
+                                "parameters": [
+                                    {
+                                        "name": "query",
+                                        "in": "query",
+                                        "description": "user query",
+                                        "required": true,
+                                        "schema": {
+                                            "type": "string"
+                                        }
+                                    }
+                                ],                
+                                "responses": {
+                                    "200": {
+                                        "description": "Query pubmed to relevant information from abstracts of biomedical articles.",
+                                        "content": {
+                                            "application/json": {
+                                                "schema": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "answer": {
+                                                            "type": "string",
+                                                            "description": "The response to user query with list of pubmed article abstracts."
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
 
   
   AgentAliasResource:
@@ -217,14 +718,7 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                 Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
-        - PolicyName: S3Access
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource: arn:aws:s3:::*
+      
   ########################
   ##### ActionGroup #####
   ######################
@@ -245,6 +739,10 @@ Resources:
         ZipFile: |
           import boto3
           import time
+          import os
+          import uuid
+          import json
+          import sys
           from collections import defaultdict
           redshift_client = boto3.client('redshift-data')
 
@@ -456,7 +954,7 @@ Resources:
                   result="Query Failed."
 
               #Upload result to S3 if response size is too large
-              BUCKET_NAME='biomarkers-discovery-agent-us-east-1-942514891246'
+              BUCKET_NAME = os.environ['BUCKET_NAME']
               KEY= str(uuid.uuid4()) + '.json'
               size = sys.getsizeof(str(result))
               print(size)
@@ -518,9 +1016,18 @@ Resources:
                   - redshift:*
                 Resource:
                   - !Sub arn:aws:redshift:${AWS::Region}:${AWS::AccountId}:*
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: 
+                  - !Sub arn:aws:s3:::${S3Bucket}/*
                   
                   
-
   AgentLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -529,4 +1036,93 @@ Resources:
       Principal: bedrock.amazonaws.com
       SourceArn: !GetAtt AgentResource.AgentArn
 
+  ScientificPlotLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+  ScientificPlotLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: EnsureECRImagePushed
+    # DependsOn: TriggerBuildLambda
+    Properties:
+      FunctionName: ScientificPlotLambda
+      PackageType: Image
+      Code:
+        ImageUri: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
+      Role: !GetAtt ScientificPlotLambdaExecutionRole.Arn
+      MemorySize: 128
+      Timeout: 900
+  
+  ScientificPlotLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ScientificPlotLambdaFunction.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt AgentResource.AgentArn
+  
+  
+  QueryPubMedLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+  QueryPubMedLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    DependsOn: ScientificPlotLambdaFunction
+    Properties:
+      FunctionName: PubMedQueryFunction
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt QueryPubMedLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: pubmed-lambda-function.zip
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+
+  QueryPubMedLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt QueryPubMedLambdaFunction.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt AgentResource.AgentArn
+
+
+  AgentIdSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub streamlitapp-${EnvironmentName}/AGENT_ID
+      Type: String
+      Value: !GetAtt AgentResource.AgentId
+      Description: !Sub SSM parameter for AgentId for ${EnvironmentName}
+
+  AgentAliasIdSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub streamlitapp-${EnvironmentName}/AGENT_ALIAS_ID
+      Type: String
+      Value: !GetAtt AgentAliasResource.AgentAliasId
+      Description: !Sub SSM parameter for AgentAliasId for ${EnvironmentName}
+  
 
