@@ -113,12 +113,7 @@ Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: 
-        Fn::Sub:
-          - '${BucketPrefix}-${StackIdPart}'
-          - BucketPrefix: '${EnvironmentName}'
-            StackIdPart: 
-              !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      BucketName: !Sub '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-Agent-Build-Bucket'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -402,6 +397,11 @@ Resources:
         the required biomarkers.
       Description: "Agent for querying biomaker database."
       ActionGroups:
+        # - ActionGroupName: code-interpreter
+        #   Description: Allows code interpreter
+        #   ParentActionGroupSignature: AMAZON.CodeInterpreter
+        #   ActionGroupState: ENABLED
+       
         - ActionGroupName: sqlActionGroup
           Description: Action for getting the database schema and querying the database
           ActionGroupExecutor: 
@@ -699,7 +699,7 @@ Resources:
   AgentRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::AccountId}_${AWS::StackName}
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
