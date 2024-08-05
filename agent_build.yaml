@@ -113,7 +113,7 @@ Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-Agent-Build-Bucket'
+      BucketName: !Sub '${AWS::StackName}-${AWS::AccountId}-Agent-Build-Bucket'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -699,7 +699,7 @@ Resources:
   AgentRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::AccountId}_${AWS::StackName}
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::StackName}
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
