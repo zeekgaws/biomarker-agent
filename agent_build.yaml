@@ -8,8 +8,8 @@ Parameters:
     Default: anthropic.claude-3-sonnet-20240229-v1:0
   EnvironmentName:
     Type: String
-    Description: The name of the agent environment, used to differenciate agent application.
-    Default: Research-Assistant
+    Description: The name of the agent environment, used to differenciate agent application, name must be lowercase.
+    Default: research-assistant
   GitRepoURL:
     Type: String
     Default: https://github.com/zeekgaws/biomarker-agent
@@ -113,7 +113,7 @@ Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-Agent-Build-Bucket'
+      BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-agent-build-bucket'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -699,7 +699,7 @@ Resources:
   AgentRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::AccountId}
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${AWS::AccountId}
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
