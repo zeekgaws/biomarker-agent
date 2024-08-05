@@ -9,7 +9,7 @@ Parameters:
   EnvironmentName:
     Type: String
     Description: The name of the agent environment, used to differenciate agent application.
-    Default: Medical-Research-Assistant
+    Default: Research-Assistant
   GitRepoURL:
     Type: String
     Default: https://github.com/zeekgaws/biomarker-agent
@@ -113,7 +113,7 @@ Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${AWS::StackName}-${AWS::AccountId}-Agent-Build-Bucket'
+      BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-Agent-Build-Bucket'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -699,7 +699,7 @@ Resources:
   AgentRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::StackName}
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${EnvironmentName}_${AWS::AccountId}
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
