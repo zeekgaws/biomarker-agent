@@ -12,7 +12,7 @@ Parameters:
     Default: research-assistant
   GitRepoURL:
     Type: String
-    Default: https://github.com/zeekgaws/biomarker-agent
+    Default: https://github.com/zeekgaws/biomarker-agent.git
     Description: Git repository URL where the code files are stored
   ImageTag:
     Type: String
@@ -397,10 +397,10 @@ Resources:
         the required biomarkers.
       Description: "Agent for querying biomaker database."
       ActionGroups:
-        # - ActionGroupName: code-interpreter
-        #   Description: Allows code interpreter
-        #   ParentActionGroupSignature: AMAZON.CodeInterpreter
-        #   ActionGroupState: ENABLED
+        - ActionGroupName: code-interpreter
+          Description: Allows code interpreter
+          ParentActionGroupSignature: AMAZON.CodeInterpreter
+          ActionGroupState: ENABLED
        
         - ActionGroupName: sqlActionGroup
           Description: Action for getting the database schema and querying the database
