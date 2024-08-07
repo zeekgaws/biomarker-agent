@@ -1013,6 +1013,9 @@ Resources:
       Role: !GetAtt ScientificPlotLambdaExecutionRole.Arn
       MemorySize: 128
       Timeout: 900
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3Bucket
   
   ScientificPlotLambdaPermission:
     Type: AWS::Lambda::Permission
