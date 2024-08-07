@@ -397,11 +397,6 @@ Resources:
         the required biomarkers.
       Description: "Agent for querying biomaker database."
       ActionGroups:
-        - ActionGroupName: code-interpreter
-          Description: Allows code interpreter
-          ParentActionGroupSignature: AMAZON.CodeInterpreter
-          ActionGroupState: ENABLED
-       
         - ActionGroupName: sqlActionGroup
           Description: Action for getting the database schema and querying the database
           ActionGroupExecutor: 
@@ -553,87 +548,43 @@ Resources:
           Description: Actions for scientific analysis with lifelines library 
           ActionGroupExecutor: 
             Lambda: !GetAtt ScientificPlotLambdaFunction.Arn
-          ApiSchema:
-            Payload: |
-              {
-                "openapi": "3.0.0",
-                "info": {
-                  "title": "Plot Kaplan Meier",
-                  "version": "1.0.0"
-                },
-                "paths": {
-                  "/plot_kaplan_meier": {
-                    "post": {
-                      "summary": "Plot Kaplan Meier Curve",
-                      "description": "Generate a Kaplan-Meier survival curve plot based on provided biomarker and survival data.",
-                      "requestBody": {
-                        "required": true,
-                        "content": {
-                          "application/json": {
-                            "schema": {
-                              "type": "object",
-                              "required": ["biomarker_name", "duration_baseline", "duration_condition", "event_baseline", "event_condition"],
-                              "properties": {
-                                "biomarker_name": {
-                                  "type": "string",
-                                  "description": "name of the biomarker"
-                                },
-                                "duration_baseline": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "number"
-                                  },
-                                  "description": "duration in number of days for baseline"
-                                },
-                                "duration_condition": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "number"
-                                  },
-                                  "description": "duration in number of days for condition"
-                                },
-                                "event_baseline": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "boolean"
-                                  },
-                                  "description": "survival event for baseline"
-                                },
-                                "event_condition": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "boolean"
-                                  },
-                                  "description": "survival event for condition"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      },
-                      "responses": {
-                        "200": {
-                          "description": "Successful response",
-                          "content": {
-                            "image/png": {
-                              "schema": {
-                                "type": "string",
-                                "format": "binary"
-                              }
-                            }
-                          }
-                        },
-                        "400": {
-                          "description": "Bad request"
-                        },
-                        "500": {
-                          "description": "Internal server error"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
+          FunctionSchema:
+            Functions:
+              - Description: "Plots a Kaplan-Meier survival curve"
+                Name: "plot_kaplan_meier"
+                Parameters:
+                  biomarker_name:
+                    Type: "string"
+                    Description: "name of the biomarker"
+                    Required: true
+                  duration_baseline:
+                    Type: "array"
+                    Description: "duration in number of days for baseline"
+                    Required: true
+                  duration_condition:
+                    Type: "array"
+                    Description: "duration in number of days for condition"
+                    Required: true
+                  event_baseline:
+                    Type: "array"
+                    Description: "survival event for baseline"
+                    Required: true
+                  event_condition:
+                    Type: "array"
+                    Description: "survival event for condition"
+                    Required: true
+              - Description: "Fits a survival regression model"
+                Name: "fit_survival_regression"
+                Parameters:
+                  bucket:
+                    Type: "string"
+                    Description: "s3 bucket"
+                    Required: true
+                  key:
+                    Type: "string"
+                    Description: "object key"
+                    Required: true
+          
         - ActionGroupName: queryPubMed
           Description: Actions for fetching biomedical literature from PubMed
           ActionGroupExecutor: 
@@ -1125,4 +1076,88 @@ Resources:
       Value: !GetAtt AgentAliasResource.AgentAliasId
       Description: !Sub SSM parameter for AgentAliasId for ${EnvironmentName}
   
+  enableCodeInterpreter:
+    Type: Custom::enableCodeInterpreter
+    DependsOn: 
+      - AgentResource
+    Properties:
+      ServiceToken: !GetAtt CodeInterpreterLambda.Arn
+      agentId: !GetAtt AgentResource.AgentId
+      agentVersion: !GetAtt AgentResource.AgentVersion
+
+  CodeInterpreterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt CodeInterpreterLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import os
+
+          def handler(event, context):
+              client = boto3.client('bedrock-agent')
+              
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      response = client.create_agent_action_group(
+                          actionGroupName='CodeInterpreterAction',
+                          actionGroupState='ENABLED',
+                          agentId=os.environ['agentId'],
+                          agentVersion=os.environ['agentVersion'],
+                          parentActionGroupSignature='AMAZON.CodeInterpreter'
+                      )
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "Action group created successfully"})
+                  elif event['RequestType'] == 'Delete':
+                      # Optionally handle deletion if needed
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "No action needed for deletion"})
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": "Unsupported request type"})
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+      Runtime: python3.12
+      Timeout: 300  
+      Environment:
+        Variables:
+          agentId: !GetAtt AgentResource.AgentId
+          agentVersion: !GetAtt AgentResource.AgentVersion
+
+  CodeInterpreterLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+        - PolicyName: BedrockAgentActionGroupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:CreateAgentActionGroup
+                Resource: '*'
+       
+          
 
