@@ -1,13 +1,35 @@
 
 import json
-from lifelines import KaplanMeierFitter
+from lifelines import KaplanMeierFitter,CoxPHFitter
 import plotly.graph_objects as go
 import ast
 import io
 import kaleido
 import boto3
 import os
+import pandas as pd
+from lifelines import CoxPHFitter
   
+
+def fit_survival_regression_model(data):
+    """ Fit Cox survival regression model to data and return a data frame """
+    records = data['Records']
+    # Convert the data to a list of lists
+    rows = []
+    for row in records:
+        rows.append([value.get(list(value.keys())[0]) for value in row])
+
+    # Create the DataFrame
+    df = pd.DataFrame(rows)
+
+    # Print the DataFrame
+    df[0] = df[0].map({'Alive': 0, 'Dead': 1})
+    print(df)
+    cph = CoxPHFitter()
+    
+    cph.fit(df, duration_col=1, event_col=0)
+    summary = cph.summary
+    return summary
     
 
 def fit_km(name, durations, event_observed):
@@ -100,49 +122,68 @@ def lambda_handler(event, context):
     actionGroup = event['actionGroup']
     function = event['function']
     parameters = event.get('parameters', [])
-    for param in parameters:
-        if param["name"] == "biomarker_name":
-            biomarker_name = param["value"]
-        if param["name"] == "hazard_ratio":
-            hazard_ratio = param["value"]
-        if param["name"] == "p_value":
-            p_value = param["value"]
-        if param["name"] == "baseline":
-            baseline = param["value"]
-        if param["name"] == "duration_baseline":
-            duration_baseline = param["value"]
-        if param["name"] == "event_baseline":
-            event_baseline = param["value"]
-        if param["name"] == "condition":
-            condition = param["value"]
-        if param["name"] == "duration_condition":
-            duration_condition = param["value"]
-        if param["name"] == "event_condition":
-            event_condition = param["value"]
-        print(os.environ['S3_BUCKET'])
-        s3_bucket = os.environ['S3_BUCKET']
-        
-    print(type(duration_baseline))
-    print(duration_baseline)
-    duration_baseline = ast.literal_eval(duration_baseline)
-    event_baseline = ast.literal_eval(event_baseline)
-    duration_condition = ast.literal_eval(duration_condition)
-    event_condition = ast.literal_eval(event_condition)
-    print(type(duration_baseline))
-    #duration_baseline = duration_baseline.tolist()
-    #event_baseline = event_baseline.tolist()
-    #duration_condition = duration_condition.tolist()
-    #event_condition = event_condition.tolist()
-    baseline = '<=10' 
-    condition = '>10'
-    # Execute your business logic here. For more information, refer to: https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
-    fig = plot_kaplan_meier(biomarker_name,baseline, duration_baseline,event_baseline,condition,duration_condition,event_condition)
-    save_plot(fig,s3_bucket)
-    responseBody =  {
-        "TEXT": {
-            "body": "The function {} was called successfully!".format(function)
+    if function == "plot_kaplan_meier":
+    
+        for param in parameters:
+            if param["name"] == "biomarker_name":
+                biomarker_name = param["value"]
+            if param["name"] == "hazard_ratio":
+                hazard_ratio = param["value"]
+            if param["name"] == "p_value":
+                p_value = param["value"]
+            if param["name"] == "baseline":
+                baseline = param["value"]
+            if param["name"] == "duration_baseline":
+                duration_baseline = param["value"]
+            if param["name"] == "event_baseline":
+                event_baseline = param["value"]
+            if param["name"] == "condition":
+                condition = param["value"]
+            if param["name"] == "duration_condition":
+                duration_condition = param["value"]
+            if param["name"] == "event_condition":
+                event_condition = param["value"]
+            ##Following environment variable should be set with your lambda function
+            print(os.environ['S3_BUCKET'])
+            s3_bucket = os.environ['S3_BUCKET']
+            
+        print(type(duration_baseline))
+        print(duration_baseline)
+        duration_baseline = ast.literal_eval(duration_baseline)
+        event_baseline = ast.literal_eval(event_baseline)
+        duration_condition = ast.literal_eval(duration_condition)
+        event_condition = ast.literal_eval(event_condition)
+        print(type(duration_baseline))
+        baseline = '<=10' 
+        condition = '>10'
+        # Execute your business logic here. For more information, refer to: https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
+        fig = plot_kaplan_meier(biomarker_name,baseline, duration_baseline,event_baseline,condition,duration_condition,event_condition)
+        save_plot(fig,s3_bucket)
+        responseBody =  {
+            "TEXT": {
+                "body": "The function {} was called successfully!".format(function)
+            }
         }
-    }
+    
+    if function == "fit_survival_regression":
+        bucket = ''
+        key = ''
+        s3 = boto3.client('s3')
+        for param in parameters:
+            if param["name"] == "bucket":
+                bucket = param["value"]
+                print(bucket)
+            if param["name"] == "key":
+                key = param["value"]
+                print(key)
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        data = json.loads(obj['Body'].read().decode('utf-8'))
+        summary = fit_survival_regression_model(data)
+        responseBody =  {
+            "TEXT": {
+                "body": "The function {} was called successfully! with a response summary as {}".format(function,summary)
+            }
+        }
 
     action_response = {
         'actionGroup': actionGroup,
