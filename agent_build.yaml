@@ -522,7 +522,7 @@ Resources:
                                       },
                                       "question": {
                                         "type": "string",
-                                        "description": ""The question related to the rationale of the specific step.""
+                                        "description": "The question related to the rationale of the specific step."
                                       }
                                     },
                                     "required": [
