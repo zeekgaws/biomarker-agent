@@ -171,9 +171,11 @@ Resources:
                 - docker tag lifelines-python3.12-v2:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
                 - echo "Docker image tagged"
                 - cd ../..
-                - echo "Copying pre-zipped Lambda function..."
-                - cp biomarker-agent/pubmed-lambda-function.zip ./
-                - echo "Lambda function zip copied"
+                - echo "Zipping Lambda function..."
+                - cd biomarker-agent/pubmed-lambda-function
+                - zip -r ../../pubmed-lambda-function.zip .
+                - cd ../..
+                - echo "Lambda function zipped"
             post_build:
               commands:
                 - echo "Starting post_build phase"
@@ -381,20 +383,32 @@ Resources:
       AutoPrepare : True
       FoundationModel: !Ref BedrockModelId
       Instruction: |
-        You are a medical research assistant that generates SQL queries against a database containing medical biomarker information. 
-        Before executing any SQL query, you should first evaluate its efficiency and correctness by calling the `/refineesql` API 
-        with the proposed SQL query and the related question. This API will analyze the query and return an evaluated or optimized 
-        version if needed. Only after receiving the evaluated query from this API should you proceed to execute the query by calling the 
-        `/queryredshift` API. Additionally, you can look up the schema of the database tables by calling the `/getschema` API to ensure 
-        your queries are correctly formatted and targeting the appropriate columns. Please remove all next line ("\n") characters from 
-        the sql queries. You can plot a Kaplan Meier graph by calling the '/plot_kaplan_meier' API. In order to plot a Kaplan Meier 
-        graph for chemotherapy patients, you can query the chemotherapy survival table. To invoke the '/plot_kaplan_meier' API, you 
-        can generate the parameter values yourself by mapping survival status as the event parameter, time to death(days) as the 
-        duration parameter, and expression group with value 0 as the filter value for baseline parameter and expression group with 
-        value 1 as the filter value for condition parameter.  You can identify a best performing biomarker based on the p-value 
-        summary after fitting a survival regression model with  '/fit_survival_regression' API. In order to fit a survival 
-        regression model, you first query the table for all the records that include survival status and duration and all 
-        the required biomarkers.
+        You are a medical research assistant that generates SQL queries against
+        a database containing medical biomarker information. You can look up the
+        schema of the database tables by calling the `/getschema` API to ensure
+        your queries are correctly formatted and targeting the appropriate columns.
+        Before executing any SQL query, you should first evaluate it with the rationale
+        of the specific step  by calling the `/evaluatesql` API with the proposed SQL query
+        and the rationale of the specific step as the question. This API will analyze the query
+        and return an evaluated or optimized version if needed. Only after receiving the evaluated
+        query from this API should you proceed to execute the query by calling the `/queryredshift`
+        API. Please remove all next line ("\n") characters from the sql queries. You can plot a
+        Kaplan Meier chart by calling the '/plot_kaplan_meier' API. To invoke the '/plot_kaplan_meier'
+        API, you can generate the parameter values by executing python code by mapping survival status
+        with value 0 for Alive and value 1 for Dead as the event parameter, time to death(days) as the
+        duration parameter, and expression group with value 0 as the filter value for baseline parameter
+        and expression group with value 1 as the filter value for condition parameter. Use the
+        '/fit_survival_regression' API to identify a best performing biomarker based on the p-value
+        summary by fitting a survival regression model. To invoke  '/fit_survival_regression' API, you
+        must retrieve all the records with columns that include survival status as first column, then
+        duration and  then the required biomarkers. You can process computed tomographic (CT) lung
+        imaging biomarker with the 'compute_imaging_biomarker' API. You should identify patient
+        subject ID based on the conversation and pass it as an array of string such as ["R01-043", "R01-93"].
+        You have access to tools and APIs to evaluate SQL, query redshift database, plot a kaplan meier chart,
+        fit a survival regression model and compute imaging biomarkers. If required, you have access to code
+        interpreter to execute python code, and can write code as needed and pass it to code interpreter to execute.
+
+
       Description: "Agent for querying biomaker database."
       ActionGroups:
         - ActionGroupName: sqlActionGroup
@@ -508,7 +522,7 @@ Resources:
                                       },
                                       "question": {
                                         "type": "string",
-                                        "description": "The question related to the SQL query."
+                                        "description": ""The question related to the rationale of the specific step.""
                                       }
                                     },
                                     "required": [
@@ -702,6 +716,8 @@ Resources:
               
               prompt= f"""
               Here is the schema <schema>{json.dumps(schema)}</schema>
+              Pay attention to the accepted values and the column data type located in the comment field for each column.
+
               Here is the generated sql query
               <sql>{sql}</sql>
 
@@ -1000,6 +1016,15 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: S3PutObjectPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
 
   ScientificPlotLambdaFunction:
     Type: AWS::Lambda::Function
@@ -1011,7 +1036,7 @@ Resources:
       Code:
         ImageUri: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
       Role: !GetAtt ScientificPlotLambdaExecutionRole.Arn
-      MemorySize: 128
+      MemorySize: 512
       Timeout: 900
       Environment:
         Variables:
@@ -1078,6 +1103,17 @@ Resources:
       Type: String
       Value: !GetAtt AgentAliasResource.AgentAliasId
       Description: !Sub SSM parameter for AgentAliasId for ${EnvironmentName}
+
+
+  S3BucketNameSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /streamlitapp/${EnvironmentName}/S3_BUCKET_NAME
+      Type: String
+      Value: !Ref S3Bucket
+      Description: !Sub SSM parameter for S3 bucket name for ${EnvironmentName}
+
+
   
   enableCodeInterpreter:
     Type: Custom::enableCodeInterpreter
@@ -1099,22 +1135,74 @@ Resources:
           import cfnresponse
           import os
 
+          def create_ssm_parameter(environment_name, agent_alias_id):
+              ssm_client = boto3.client('ssm')
+              parameter_name = f"/streamlitapp/{environment_name}/AGENT_ALIAS_ID"
+              parameter_value = agent_alias_id
+              parameter_type = "String"
+              parameter_description = f"SSM parameter for AgentAliasId for {environment_name}"
+
+              try:
+                  ssm_client.put_parameter(
+                      Name=parameter_name,
+                      Value=parameter_value,
+                      Type=parameter_type,
+                      Description=parameter_description,
+                      Overwrite=True
+                  )
+                  print(f"SSM Parameter '{parameter_name}' created/updated successfully.")
+              except Exception as e:
+                  print(f"Error creating/updating SSM Parameter: {str(e)}")
+                  raise
+
+          def get_ssm_parameter(environment_name):
+              ssm_client = boto3.client('ssm')
+              parameter_name = f"/streamlitapp/{environment_name}/AGENT_ALIAS_ID"
+              
+              try:
+                  response = ssm_client.get_parameter(Name=parameter_name)
+                  return response['Parameter']['Value']
+              except ssm_client.exceptions.ParameterNotFound:
+                  print(f"SSM Parameter '{parameter_name}' not found.")
+                  return None
+              except Exception as e:
+                  print(f"Error retrieving SSM Parameter: {str(e)}")
+                  raise
+
           def handler(event, context):
               client = boto3.client('bedrock-agent')
+              environment_name = os.environ['ENVIRONMENT_NAME']
               
               try:
                   if event['RequestType'] in ['Create', 'Update']:
                       response = client.create_agent_action_group(
                           actionGroupName='CodeInterpreterAction',
                           actionGroupState='ENABLED',
-                          agentId=os.environ['agentId'],
+                          agent_id=os.environ['agentId'],
                           agentVersion=os.environ['agentVersion'],
                           parentActionGroupSignature='AMAZON.CodeInterpreter'
                       )
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "Action group created successfully"})
+                      agent_id = os.environ['agentId']
+                      agentPrep = client.prepare_agent(agentId=agent_id)
+                      agentAlias = client.create_agent_alias(agentAliasName='v2', agentId=agent_id)
+                      agent_alias_id = agentAlias['agentAliasId']
+                      
+                      # Create SSM parameter
+                      create_ssm_parameter(environment_name, agent_alias_id)
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "Action group and SSM parameter created successfully"})
                   elif event['RequestType'] == 'Delete':
-                      # Optionally handle deletion if needed
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "No action needed for deletion"})
+                      # Retrieve the agent alias ID from SSM
+                      agent_alias_id = get_ssm_parameter(environment_name)
+                      
+                      if agent_alias_id:
+                          # Delete the agent alias
+                          response = client.delete_agent_alias(agentAliasId=agent_alias_id, agentId=os.environ['agentId'])
+                          print(f"Agent alias {agent_alias_id} deleted successfully.")
+                          
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "Agent alias and SSM parameter deleted successfully"})
+                      else:
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Message": "No agent alias found to delete"})
                   else:
                       cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": "Unsupported request type"})
               except Exception as e:
@@ -1122,11 +1210,12 @@ Resources:
                   cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
 
       Runtime: python3.12
-      Timeout: 300  
+      Timeout: 300
       Environment:
         Variables:
           agentId: !GetAtt AgentResource.AgentId
           agentVersion: !GetAtt AgentResource.AgentVersion
+          ENVIRONMENT_NAME: !Ref EnvironmentName
 
   CodeInterpreterLambdaRole:
     Type: AWS::IAM::Role
