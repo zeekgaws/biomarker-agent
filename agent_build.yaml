@@ -1178,7 +1178,7 @@ Resources:
                       response = client.create_agent_action_group(
                           actionGroupName='CodeInterpreterAction',
                           actionGroupState='ENABLED',
-                          agent_id=os.environ['agentId'],
+                          agentId=os.environ['agentId'],
                           agentVersion=os.environ['agentVersion'],
                           parentActionGroupSignature='AMAZON.CodeInterpreter'
                       )
@@ -1186,7 +1186,7 @@ Resources:
                       agentPrep = client.prepare_agent(agentId=agent_id)
                       agentAlias = client.create_agent_alias(agentAliasName='v2', agentId=agent_id)
                       agent_alias_id = agentAlias['agentAliasId']
-                      
+              
                       # Create SSM parameter
                       create_ssm_parameter(environment_name, agent_alias_id)
                       
