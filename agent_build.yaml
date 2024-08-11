@@ -1175,9 +1175,9 @@ Resources:
           def prepare_agent(client, agent_id):
               MAX_ATTEMPTS = 30
               DELAY_SECONDS = 10
+              agentPrep = client.prepare_agent(agentId=agent_id)
 
               for attempt in range(MAX_ATTEMPTS):
-                  agentPrep = client.prepare_agent(agentId=agent_id)
                   print(f"Agent status is: {agentPrep['agentStatus']} (Attempt {attempt + 1}/{MAX_ATTEMPTS})")
                   response = client.get_agent(agentId=agent_id)
                   agentStatus=response['agent']['agentStatus']
@@ -1211,7 +1211,7 @@ Resources:
                           raise Exception("Agent failed to prepare or preparation timed out")
 
                       agentAlias = client.create_agent_alias(agentAliasName='v2', agentId=agent_id)
-                      agent_alias_id = agentAlias['agentAliasId']
+                      agent_alias_id = agentAlias['agentAlias']['agentAliasId']
                   
                       # Create SSM parameter
                       create_ssm_parameter(environment_name, agent_alias_id)
@@ -1240,7 +1240,7 @@ Resources:
       Environment:
         Variables:
           agentId: !GetAtt AgentResource.AgentId
-          agentVersion: "Version 1"
+          agentVersion: !GetAtt AgentResource.AgentVersion
           ENVIRONMENT_NAME: !Ref EnvironmentName
 
   CodeInterpreterLambdaRole:
@@ -1278,6 +1278,15 @@ Resources:
                   - bedrock:DeleteAgentAlias
                   - bedrock:GetAgent
                 Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*
+        - PolicyName: BedrockAgentAliasPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:CreateAgentAlias
+                  - bedrock:DeleteAgentAlias
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/*
         - PolicyName: SSMParameterPolicy
           PolicyDocument:
             Version: '2012-10-17'
