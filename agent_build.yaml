@@ -659,6 +659,9 @@ Resources:
     Properties:
       AgentId: !GetAtt AgentResource.AgentId
       AgentAliasName: !Sub biomakers-alias
+      RoutingConfiguration: {
+               "AgentVersion": "1"
+            }
       
 
   AgentRole:
@@ -1179,7 +1182,7 @@ Resources:
                   agentPrep = client.prepare_agent(agentId=agent_id)
                   print(f"Agent status is: {agentPrep['agentStatus']} (Attempt {attempt + 1}/{MAX_ATTEMPTS})")
                   response = client.get_agent(agentId=agent_id)
-                  agentStatus=response['agentStatus']
+                  agentStatus=response['agent']['agentStatus']
                   
                   if agentStatus == 'PREPARED':
                       return True
