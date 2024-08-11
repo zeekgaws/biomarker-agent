@@ -659,9 +659,8 @@ Resources:
     Properties:
       AgentId: !GetAtt AgentResource.AgentId
       AgentAliasName: !Sub biomakers-alias
-      RoutingConfiguration: {
-               "AgentVersion": "1"
-            }
+      RoutingConfiguration: 
+        - AgentVersion: "1"
       
 
   AgentRole:
