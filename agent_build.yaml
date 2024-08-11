@@ -191,6 +191,109 @@ Resources:
               - pubmed-lambda-function.zip
       TimeoutInMinutes: 10
 
+  ImagingECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: medical-image-processing-smstudio
+
+  ImagingDockerBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: GITHUB
+        Location: !Ref GitRepoURL
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                - echo Cloning the repository...
+                - git clone ${GitRepoURL}
+                - cd biomarker-agent/imaging-biomarker 
+                - echo Checking for required files...
+                - ls -la
+                - if [ ! -f requirements.txt ] || [ ! -f dcm2nifti_processing.py ] || [ ! -f radiomics_utils.py ]; then echo "Missing required files"; exit 1; fi
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image...
+                - docker build -t ${ImagingECRRepository}:${ImageTag} .
+                - docker tag ${ImagingECRRepository}:${ImageTag} ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                - docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}
+      SourceVersion: main
+  ImagingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      DefinitionString: !Sub
+        - |
+          {
+            "Comment": "NSCLC Radiogenomics Imaging Workflow",
+            "StartAt": "ProcessImages",
+            "States": {
+              "ProcessImages": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::sagemaker:createProcessingJob.sync",
+                "Parameters": {
+                  "ProcessingInputs": [
+                    {
+                      "InputName": "input-1",
+                      "S3Input": {
+                        "S3Uri": "${S3Bucket}",
+                        "LocalPath": "/opt/ml/processing/input",
+                        "S3DataType": "S3Prefix",
+                        "S3InputMode": "File"
+                      }
+                    }
+                  ],
+                  "ProcessingOutputConfig": {
+                    "Outputs": [
+                      {
+                        "OutputName": "output-1",
+                        "S3Output": {
+                          "S3Uri": "${S3Bucket}",
+                          "LocalPath": "/opt/ml/processing/output",
+                          "S3UploadMode": "EndOfJob"
+                        }
+                      }
+                    ]
+                  },
+                  "ProcessingResources": {
+                    "ClusterConfig": {
+                      "InstanceCount": 1,
+                      "InstanceType": "ml.m5.xlarge",
+                      "VolumeSizeInGB": 30
+                    }
+                  },
+                  "StoppingCondition": {
+                    "MaxRuntimeInSeconds": 7200
+                  },
+                  "AppSpecification": {
+                    "ImageUri": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}"
+                  },
+                  "RoleArn": "${SageMakerExecutionRole.Arn}"
+                },
+                "End": true
+              }
+            }
+          }
+        - {}
+
+
   # IAM role for CodeBuild
   CodeBuildRole:
     Type: AWS::IAM::Role
@@ -260,6 +363,55 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:PutImage
                 Resource: '*'
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sagemaker:CreateProcessingJob'
+                  - 'sagemaker:DescribeProcessingJob'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: !GetAtt SageMakerExecutionRole.Arn
+  SageMakerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${S3Bucket}'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/*'
 
   TriggerBuildLambda:
     Type: AWS::Lambda::Function
@@ -373,6 +525,7 @@ Resources:
     Properties:
       ServiceToken: !GetAtt TriggerBuildLambda.Arn
       ProjectName: !Ref DockerPushLogic
+  
 
 
   AgentResource:
@@ -812,18 +965,6 @@ Resources:
                         pg_catalog.pg_attribute a
                     WHERE
                         a.attrelid = 'clinical_genomic'::regclass
-                        AND a.attnum > 0
-                        AND NOT a.attisdropped
-                    UNION ALL
-                    SELECT
-                        'chemotherapy_survival' AS table_name,
-                        a.attname AS column_name,
-                        pg_catalog.format_type(a.atttypid, a.atttypmod) AS column_type,
-                        pg_catalog.col_description(a.attrelid, a.attnum) AS column_comment
-                    FROM
-                        pg_catalog.pg_attribute a
-                    WHERE
-                        a.attrelid = 'chemotherapy_survival'::regclass
                         AND a.attnum > 0
                         AND NOT a.attisdropped;"""
               
