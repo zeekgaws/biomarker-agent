@@ -1134,6 +1134,7 @@ Resources:
           import boto3
           import cfnresponse
           import os
+          import time
 
           def create_ssm_parameter(environment_name, agent_alias_id):
               ssm_client = boto3.client('ssm')
@@ -1169,6 +1170,24 @@ Resources:
                   print(f"Error retrieving SSM Parameter: {str(e)}")
                   raise
 
+          def prepare_agent(client, agent_id):
+              MAX_ATTEMPTS = 30
+              DELAY_SECONDS = 10
+
+              for attempt in range(MAX_ATTEMPTS):
+                  agentPrep = client.prepare_agent(agentId=agent_id)
+                  print(f"Agent status is: {agentPrep['agentStatus']} (Attempt {attempt + 1}/{MAX_ATTEMPTS})")
+                  
+                  if agentPrep['agentStatus'] == 'PREPARED':
+                      return True
+                  elif agentPrep['agentStatus'] == 'FAILED':
+                      return False
+                  
+                  if attempt < MAX_ATTEMPTS - 1:
+                      time.sleep(DELAY_SECONDS)
+
+              return False
+
           def handler(event, context):
               client = boto3.client('bedrock-agent')
               environment_name = os.environ['ENVIRONMENT_NAME']
@@ -1183,10 +1202,13 @@ Resources:
                           parentActionGroupSignature='AMAZON.CodeInterpreter'
                       )
                       agent_id = os.environ['agentId']
-                      agentPrep = client.prepare_agent(agentId=agent_id)
+                      
+                      if not prepare_agent(client, agent_id):
+                          raise Exception("Agent failed to prepare or preparation timed out")
+
                       agentAlias = client.create_agent_alias(agentAliasName='v2', agentId=agent_id)
                       agent_alias_id = agentAlias['agentAliasId']
-              
+                  
                       # Create SSM parameter
                       create_ssm_parameter(environment_name, agent_alias_id)
                       
