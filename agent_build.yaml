@@ -1178,10 +1178,12 @@ Resources:
               for attempt in range(MAX_ATTEMPTS):
                   agentPrep = client.prepare_agent(agentId=agent_id)
                   print(f"Agent status is: {agentPrep['agentStatus']} (Attempt {attempt + 1}/{MAX_ATTEMPTS})")
+                  response = client.get_agent(agentId=agent_id)
+                  agentStatus=response['agentStatus']
                   
-                  if agentPrep['agentStatus'] == 'PREPARED':
+                  if agentStatus == 'PREPARED':
                       return True
-                  elif agentPrep['agentStatus'] == 'FAILED':
+                  elif agentStatus == 'FAILED':
                       return False
                   
                   if attempt < MAX_ATTEMPTS - 1:
@@ -1273,6 +1275,7 @@ Resources:
                   - bedrock:PrepareAgent
                   - bedrock:CreateAgentAlias
                   - bedrock:DeleteAgentAlias
+                  - bedrock:GetAgent
                 Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*
         - PolicyName: SSMParameterPolicy
           PolicyDocument:
