@@ -1118,7 +1118,8 @@ Resources:
   enableCodeInterpreter:
     Type: Custom::enableCodeInterpreter
     DependsOn: 
-      - AgentResource
+      - AgentAliasResource
+      - AgentAliasIdSSMParameter
     Properties:
       ServiceToken: !GetAtt CodeInterpreterLambda.Arn
       agentId: !GetAtt AgentResource.AgentId
@@ -1251,8 +1252,6 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       Policies:
         - PolicyName: CloudWatchLogsPolicy
           PolicyDocument:
@@ -1263,15 +1262,26 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: arn:aws:logs:*:*:*
-        - PolicyName: BedrockAgentActionGroupPolicy
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+        - PolicyName: BedrockAgentPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - bedrock:CreateAgentActionGroup
-                Resource: '*'
-       
-          
+                  - bedrock:PrepareAgent
+                  - bedrock:CreateAgentAlias
+                  - bedrock:DeleteAgentAlias
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*
+        - PolicyName: SSMParameterPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/streamlitapp/*
+            
 
