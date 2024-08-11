@@ -1240,7 +1240,7 @@ Resources:
       Environment:
         Variables:
           agentId: !GetAtt AgentResource.AgentId
-          agentVersion: !GetAtt AgentResource.AgentVersion
+          agentVersion: "Version 1"
           ENVIRONMENT_NAME: !Ref EnvironmentName
 
   CodeInterpreterLambdaRole:
