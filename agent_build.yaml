@@ -20,11 +20,23 @@ Parameters:
     Description: Tag for the Docker image
 
 
+Mappings:
+  RegionMap:
+    us-east-1:
+      PandasLayer: 'arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:12'
+    us-east-2:
+      PandasLayer: 'arn:aws:lambda:us-east-2:336392948345:layer:AWSSDKPandas-Python312:12'
+    us-west-1:
+      PandasLayer: 'arn:aws:lambda:us-west-1:336392948345:layer:AWSSDKPandas-Python312:12'
+    us-west-2:
+      PandasLayer: 'arn:aws:lambda:us-west-2:336392948345:layer:AWSSDKPandas-Python312:12'
+
+
+
 Resources:
   # Create ECR repository
   ECRRepository:
     Type: AWS::ECR::Repository
-    # DependsOn: CleanupCustomResource
     Properties:
       RepositoryName: lifelines-lambda-sample
 
@@ -32,9 +44,20 @@ Resources:
     Type: Custom::EnsureECRImagePushed
     DependsOn: 
       - TriggerBuildCustomResource
+      - TriggerImagingDockerBuild
     Properties:
       ServiceToken: !GetAtt TriggerBuildLambda.Arn
       ECRRepository: !Ref ECRRepository
+      ImageTag: !Ref ImageTag
+  
+  EnsureImagingDockerImagePushed:
+    Type: Custom::EnsureECRImagePushed
+    DependsOn: 
+      - TriggerBuildCustomResource
+      - TriggerImagingDockerBuild
+    Properties:
+      ServiceToken: !GetAtt TriggerBuildLambda.Arn
+      ECRRepository: !Ref ImagingECRRepository
       ImageTag: !Ref ImageTag
       
 
@@ -110,7 +133,7 @@ Resources:
       ECRRepositoryName: !Ref ECRRepository
       S3BucketName: !Ref S3Bucket
   
-  S3Bucket:
+  S3Bucket: 
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-agent-build-bucket'
@@ -173,9 +196,16 @@ Resources:
                 - cd ../..
                 - echo "Zipping Lambda function..."
                 - cd biomarker-agent/pubmed-lambda-function
-                - zip -r ../../pubmed-lambda-function.zip .
-                - cd ../..
+                - echo "Creating list of items to zip..."
+                - items_to_zip=$(ls -A | tr '\n' ' ')
+                - echo "Items to zip: $items_to_zip"
+                - echo "Creating zip file..."
+                - zip -r pubmed-lambda-function.zip $items_to_zip
                 - echo "Lambda function zipped"
+                - cd ../..
+                - echo "Moving zip file to project root..."
+                - mv biomarker-agent/pubmed-lambda-function/pubmed-lambda-function.zip .
+                - echo "Build phase completed"
             post_build:
               commands:
                 - echo "Starting post_build phase"
@@ -206,7 +236,7 @@ Resources:
         Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
         Type: LINUX_CONTAINER
         PrivilegedMode: true
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      ServiceRole: !GetAtt CodeBuildRole.Arn
       Source:
         Type: GITHUB
         Location: !Ref GitRepoURL
@@ -223,6 +253,9 @@ Resources:
                 - echo Checking for required files...
                 - ls -la
                 - if [ ! -f requirements.txt ] || [ ! -f dcm2nifti_processing.py ] || [ ! -f radiomics_utils.py ]; then echo "Missing required files"; exit 1; fi
+                - echo Copying lambda function 
+                - aws s3 cp dummy_lambda.py s3://${S3Bucket}/lambda_function.py
+
             build:
               commands:
                 - echo Build started on `date`
@@ -235,6 +268,7 @@ Resources:
                 - echo Pushing the Docker image...
                 - docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}
       SourceVersion: main
+  
   ImagingStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -249,6 +283,7 @@ Resources:
                 "Type": "Task",
                 "Resource": "arn:aws:states:::sagemaker:createProcessingJob.sync",
                 "Parameters": {
+                  "ProcessingJobName.$": "States.Format('ImagingJob-{}', $$.Execution.Name)",
                   "ProcessingInputs": [
                     {
                       "InputName": "input-1",
@@ -363,6 +398,7 @@ Resources:
                   - ecr:CompleteLayerUpload
                   - ecr:PutImage
                 Resource: '*'
+  
   StepFunctionsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -382,11 +418,32 @@ Resources:
                 Action:
                   - 'sagemaker:CreateProcessingJob'
                   - 'sagemaker:DescribeProcessingJob'
+                  - 'sagemaker:StopProcessingJob'
+                  - 'sagemaker:ListTags'
+                  - 'sagemaker:AddTags'
                 Resource: '*'
               - Effect: Allow
                 Action:
                   - 'iam:PassRole'
                 Resource: !GetAtt SageMakerExecutionRole.Arn
+              - Effect: Allow
+                Action:
+                  - 'events:PutTargets'
+                  - 'events:PutRule'
+                  - 'events:DescribeRule'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogDelivery'
+                  - 'logs:GetLogDelivery'
+                  - 'logs:UpdateLogDelivery'
+                  - 'logs:DeleteLogDelivery'
+                  - 'logs:ListLogDeliveries'
+                  - 'logs:PutResourcePolicy'
+                  - 'logs:DescribeResourcePolicies'
+                  - 'logs:DescribeLogGroups'
+                Resource: '*'
+  
   SageMakerExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -499,7 +556,9 @@ Resources:
                 Action: 
                   - codebuild:StartBuild
                   - codebuild:BatchGetBuilds
-                Resource: !GetAtt DockerPushLogic.Arn
+                Resource: 
+                  - !GetAtt DockerPushLogic.Arn
+                  - !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/ImagingDockerBuildProject-*
         - PolicyName: CloudWatchLogsPolicy
           PolicyDocument:
             Version: '2012-10-17'
@@ -517,7 +576,14 @@ Resources:
               - Effect: Allow
                 Action: ecr:DescribeImages
                 Resource: '*'
-  
+        - PolicyName: PassRoleToCodeBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt CodeBuildRole.Arn
   
   TriggerBuildCustomResource:
     Type: Custom::TriggerBuild
@@ -525,6 +591,13 @@ Resources:
     Properties:
       ServiceToken: !GetAtt TriggerBuildLambda.Arn
       ProjectName: !Ref DockerPushLogic
+  
+  TriggerImagingDockerBuild:
+    Type: Custom::TriggerBuild
+    DependsOn: ImagingDockerBuildProject
+    Properties:
+      ServiceToken: !GetAtt TriggerBuildLambda.Arn
+      ProjectName: !Ref ImagingDockerBuildProject
   
 
 
@@ -750,6 +823,27 @@ Resources:
                   key:
                     Type: "string"
                     Description: "object key"
+                    Required: true
+        
+        - ActionGroupName: imagingBiomarkerProcessing
+          Description: Actions for processing imaging biomarker within CT scans for a list of subjects	
+          ActionGroupExecutor: 
+            Lambda: !GetAtt ImagingBiomarkerLambda.Arn
+          FunctionSchema:
+            Functions:
+              - Description: "compute the imaging biomarker features from lung CT scans within the tumor for a list of patient subject ID"
+                Name: "compute_imaging_biomarker"
+                Parameters:
+                  subject_id:
+                    Type: "array"
+                    Description: "an array of patient subject ID"
+                    Required: true
+              - Description: "analyze the result imaging biomarker features from lung CT scans within the tumor for a list of patient subject ID"
+                Name: "analyze_imaging_biomarker"
+                Parameters:
+                  subject_id:
+                    Type: "array"
+                    Description: "an array of patient subject ID"
                     Required: true
           
         - ActionGroupName: queryPubMed
@@ -1226,6 +1320,74 @@ Resources:
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt QueryPubMedLambdaFunction.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt AgentResource.AgentArn
+  
+  ImagingBiomarkerLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: EnsureECRImagePushed
+    Properties:
+      FunctionName: imaging-biomarker-lambda
+      Handler: index.lambda_handler
+      Role: !GetAtt ImagingLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref S3Bucket 
+        S3Key: lambda_function.py  
+      Runtime: python3.8
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          SFN_STATEMACHINE_NAME: !GetAtt ImagingStateMachine.Name
+          REGION: !Sub ${AWS::Region}
+          ACCOUNTID: !Sub ${AWS::AccountId}
+          S3BUCKET: !Sub s3://${S3Bucket}
+      Layers:
+        - !FindInMap [RegionMap, !Ref 'AWS::Region', PandasLayer]
+  
+  ImagingLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ImagingBiomarkerLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ImagingLambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3Bucket}
+                  - !Sub arn:aws:s3:::${S3Bucket}/*
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref ImagingStateMachine
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+  
+  ImagingLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ImagingBiomarkerLambda.Arn
       Principal: bedrock.amazonaws.com
       SourceArn: !GetAtt AgentResource.AgentArn
 
