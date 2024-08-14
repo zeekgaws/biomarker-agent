@@ -785,7 +785,7 @@ Resources:
                       }
                     }
         - ActionGroupName: scientificAnalysisActionGroup
-          Description: Actions for scientific analysis with lifelines library 
+          Description: Actions for scientific analysis with lifelines library
           ActionGroupExecutor: 
             Lambda: !GetAtt ScientificPlotLambdaFunction.Arn
           FunctionSchema:
@@ -825,7 +825,7 @@ Resources:
                     Description: "object key"
                     Required: true
         - ActionGroupName: imagingBiomarkerProcessing
-          Description: Actions for processing imaging biomarker within CT scans for a list of subjects	
+          Description: Actions for processing imaging biomarker within CT scans for a list of subjects
           ActionGroupExecutor: 
             Lambda: !GetAtt ImagingBiomarkerLambda.Arn
           FunctionSchema:
