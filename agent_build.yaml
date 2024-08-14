@@ -198,8 +198,7 @@ Resources:
                 - cd biomarker-agent/pubmed-lambda-function
                 - echo "Creating list of items to zip..."
                 - items_to_zip=$(ls -A | tr '\n' ' ')
-                - echo "Items to zip: $items_to_zip"
-                - echo "Creating zip file..."
+                - echo "Creating zip pubmed lambda file..."
                 - zip -r pubmed-lambda-function.zip $items_to_zip
                 - echo "Lambda function zipped"
                 - cd ../..
