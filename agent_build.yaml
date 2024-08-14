@@ -610,11 +610,11 @@ Resources:
       FoundationModel: !Ref BedrockModelId
       Instruction: |
         You are a medical research assistant that generates SQL queries against
-        a database containing medical biomarker information. You can look up the
+        a database containing medical biomarker information. You can look up the 
         schema of the database tables by calling the `/getschema` API to ensure
         your queries are correctly formatted and targeting the appropriate columns.
         Before executing any SQL query, you should first evaluate it with the rationale
-        of the specific step  by calling the `/evaluatesql` API with the proposed SQL query
+        of the specific step  by calling the `/refinesql` API with the proposed SQL query
         and the rationale of the specific step as the question. This API will analyze the query
         and return an evaluated or optimized version if needed. Only after receiving the evaluated
         query from this API should you proceed to execute the query by calling the `/queryredshift`
@@ -824,7 +824,6 @@ Resources:
                     Type: "string"
                     Description: "object key"
                     Required: true
-        
         - ActionGroupName: imagingBiomarkerProcessing
           Description: Actions for processing imaging biomarker within CT scans for a list of subjects	
           ActionGroupExecutor: 
@@ -1253,13 +1252,14 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       Policies:
-        - PolicyName: S3PutObjectPolicy
+        - PolicyName: S3ObjectPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - s3:PutObject
+                  - s3:GetObject
                 Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
 
   ScientificPlotLambdaFunction:
