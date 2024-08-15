@@ -1329,12 +1329,12 @@ Resources:
     DependsOn: EnsureECRImagePushed
     Properties:
       FunctionName: imaging-biomarker-lambda
-      Handler: dummy_lambda.lambda_handler
+      Handler: index.lambda_handler
       Role: !GetAtt ImagingLambdaExecutionRole.Arn
       Code:
         S3Bucket: !Ref S3Bucket 
         S3Key: Imaginglambdafunction.zip  
-      Runtime: python3.12
+      Runtime: python3.8
       Timeout: 300
       MemorySize: 256
       Environment:
