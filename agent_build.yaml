@@ -156,11 +156,7 @@ Resources:
       Name: DockerPushProject
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts:
-        Type: S3
-        Location: !Ref S3Bucket
-        Name: pubmed-lambda-function.zip
-        NamespaceType: NONE
-        Packaging: ZIP
+        Type: NO_ARTIFACTS
       LogsConfig:
         CloudWatchLogs:
           Status: ENABLED
@@ -204,6 +200,7 @@ Resources:
                 - cd ../..
                 - echo "Moving zip file to project root..."
                 - mv biomarker-agent/pubmed-lambda-function/pubmed-lambda-function.zip .
+                - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
                 - echo "Build phase completed"
             post_build:
               commands:
@@ -215,9 +212,6 @@ Resources:
                 - docker images
                 - echo "Displaying ECR repository contents"
                 - aws ecr list-images --repository-name ${ECRRepository}
-          artifacts:
-            files:
-              - pubmed-lambda-function.zip
       TimeoutInMinutes: 10
 
   ImagingECRRepository:
@@ -1329,12 +1323,12 @@ Resources:
     DependsOn: EnsureECRImagePushed
     Properties:
       FunctionName: imaging-biomarker-lambda
-      Handler: index.lambda_handler
+      Handler: dummy_lambda.lambda_handler
       Role: !GetAtt ImagingLambdaExecutionRole.Arn
       Code:
         S3Bucket: !Ref S3Bucket 
         S3Key: Imaginglambdafunction.zip  
-      Runtime: python3.8
+      Runtime: python3.12
       Timeout: 300
       MemorySize: 256
       Environment:
