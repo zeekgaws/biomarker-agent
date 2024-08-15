@@ -23,7 +23,7 @@ def fit_survival_regression_model(data):
     df = pd.DataFrame(rows)
 
     # Print the DataFrame
-    df[0] = df[0].map({'Alive': 0, 'Dead': 1})
+    # df[0] = df[0].map({'Alive': 0, 'Dead': 1})
     print(df)
     cph = CoxPHFitter()
     
@@ -118,7 +118,7 @@ def save_plot(fig,s3_bucket):
     return
 
 def lambda_handler(event, context):
-    agent = event['agent']
+    # agent = event['agent']
     actionGroup = event['actionGroup']
     function = event['function']
     parameters = event.get('parameters', [])
