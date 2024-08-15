@@ -252,8 +252,10 @@ Resources:
                 - echo Checking for required files...
                 - ls -la
                 - if [ ! -f requirements.txt ] || [ ! -f dcm2nifti_processing.py ] || [ ! -f radiomics_utils.py ]; then echo "Missing required files"; exit 1; fi
+                - zip -r Imaginglambdafunction.zip dummy_lambda.py
                 - echo Copying lambda function 
-                - aws s3 cp dummy_lambda.py s3://${S3Bucket}/lambda_function.py
+                - aws s3 cp Imaginglambdafunction.zip s3://${S3Bucket}/Imaginglambdafunction.zip
+               
 
             build:
               commands:
@@ -1331,7 +1333,7 @@ Resources:
       Role: !GetAtt ImagingLambdaExecutionRole.Arn
       Code:
         S3Bucket: !Ref S3Bucket 
-        S3Key: lambda_function.py  
+        S3Key: Imaginglambdafunction.zip  
       Runtime: python3.8
       Timeout: 300
       MemorySize: 256
