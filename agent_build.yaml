@@ -283,7 +283,7 @@ Resources:
                     {
                       "InputName": "input-1",
                       "S3Input": {
-                        "S3Uri": "${S3Bucket}",
+                        "S3Uri": "${S3Bucket}/input",
                         "LocalPath": "/opt/ml/processing/input",
                         "S3DataType": "S3Prefix",
                         "S3InputMode": "File"
@@ -295,7 +295,7 @@ Resources:
                       {
                         "OutputName": "output-1",
                         "S3Output": {
-                          "S3Uri": "${S3Bucket}",
+                          "S3Uri": "${S3Bucket}/output",
                           "LocalPath": "/opt/ml/processing/output",
                           "S3UploadMode": "EndOfJob"
                         }
@@ -315,13 +315,38 @@ Resources:
                   "AppSpecification": {
                     "ImageUri": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}"
                   },
-                  "RoleArn": "${SageMakerExecutionRole.Arn}"
+                  "RoleArn": "${SageMakerExecutionRoleArn}"
                 },
-                "End": true
+                "Retry": [
+                  {
+                    "ErrorEquals": ["SageMaker.AmazonSageMakerException"],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 8,
+                    "BackoffRate": 1.5
+                  }
+                ],
+                "Catch": [
+                  {
+                    "ErrorEquals": ["States.TaskFailed"],
+                    "Next": "Fallback"
+                  }
+                ],
+                "Next": "Finish"
+              },
+              "Fallback": {
+                "Type": "Pass",
+                "Result": "The imaging processing job failed",
+                "Next": "Finish"
+              },
+              "Finish": {
+                "Type": "Succeed"
               }
             }
           }
-        - {}
+        - {
+            S3Bucket: !Sub "s3://${S3Bucket}",
+            SageMakerExecutionRoleArn: !GetAtt SageMakerExecutionRole.Arn
+          }
 
 
   # IAM role for CodeBuild
@@ -622,14 +647,13 @@ Resources:
         '/fit_survival_regression' API to identify a best performing biomarker based on the p-value
         summary by fitting a survival regression model. To invoke  '/fit_survival_regression' API, you
         must retrieve all the records with columns that include survival status as first column, then
-        duration and  then the required biomarkers. You can process computed tomographic (CT) lung
-        imaging biomarker with the 'compute_imaging_biomarker' API. You should identify patient
-        subject ID based on the conversation and pass it as an array of string such as ["R01-043", "R01-93"].
+        duration and  then the required biomarkers. You can trigger a long-running job to process computed tomographic
+         (CT) lung imaging biomarker with the 'compute_imaging_biomarker' API. If asked for an analysis, only then you analyze
+          the results with the 'analyze_imaging_biomarker' API. Note that you should identify patient subject 
+          ID based on the conversation and pass it as an array of string such as ["R01-043", "R01-93"].
         You have access to tools and APIs to evaluate SQL, query redshift database, plot a kaplan meier chart,
         fit a survival regression model and compute imaging biomarkers. If required, you have access to code
         interpreter to execute python code, and can write code as needed and pass it to code interpreter to execute.
-
-
       Description: "Agent for querying biomaker database."
       ActionGroups:
         - ActionGroupName: sqlActionGroup
