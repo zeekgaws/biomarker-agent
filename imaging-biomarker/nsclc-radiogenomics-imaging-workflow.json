@@ -94,7 +94,7 @@
               },
               "AppSpecification": {
                 "ImageUri": "##ECR_IMAGE_URI##",
-                "ContainerArguments.$": "States.Array('--subject', $, '--feature_store_name', $$.Execution.Input['FeatureStoreName'], '--offline_store_s3uri', $$.Execution.Input['OfflineStoreS3Uri'])",
+                "ContainerArguments.$": "States.Array('--subject', $)",
                 "ContainerEntrypoint": [
                   "python3",
                   "/opt/dcm2nifti_processing.py"
