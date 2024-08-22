@@ -1509,6 +1509,7 @@ Resources:
           - Effect: Allow
             Action:
             - bedrock:InvokeModel
+            - bedrock:Retrieve
             Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
             Sid: BedrockInvokeModelStatement
       - PolicyName: OSSPolicy
