@@ -1535,7 +1535,19 @@ Resources:
   EncryptionPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
-      Name: !Sub '${AWS::StackName}-encryption-policy'
+      Name: 
+        Fn::Join:
+          - '-'
+          - - 'encryption-policy'
+            - Fn::Select:
+                - 1
+                - Fn::Split:
+                    - '-'
+                    - Fn::Select:
+                        - '-1'
+                        - Fn::Split:
+                            - '-'
+                            - !Ref 'AWS::StackName'
       Type: encryption
       Description: !Sub 'Encryption policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1552,7 +1564,19 @@ Resources:
   NetworkPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
-      Name: !Sub '${AWS::StackName}-network-policy'
+      Name: 
+        Fn::Join:
+          - '-'
+          - - 'network-policy'
+            - Fn::Select:
+                - 1
+                - Fn::Split:
+                    - '-'
+                    - Fn::Select:
+                        - '-1'
+                        - Fn::Split:
+                            - '-'
+                            - !Ref 'AWS::StackName'
       Type: network
       Description: !Sub 'Network policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1571,7 +1595,18 @@ Resources:
   Collection:
     Type: 'AWS::OpenSearchServerless::Collection'
     Properties:
-      Name: !Sub '${AWS::StackName}-${VectorStoreName}'
+      Name: 
+        Fn::Join:
+          - '-'
+          - - Fn::Select:
+                - 1
+                - Fn::Split:
+                    - '|'
+                    - Fn::Join:
+                        - '|'
+                        - - ''
+                          - Fn::Sub: '${AWS::StackName: -6}'
+          - !Ref 'VectorStoreName'
       Type: VECTORSEARCH
       Description: !Sub 'Collection to hold vector for ${AWS::StackName}'
     DependsOn: 
@@ -1767,7 +1802,19 @@ Resources:
   DataAccessPolicy:
     Type: 'AWS::OpenSearchServerless::AccessPolicy'
     Properties:
-      Name: !Sub '${AWS::StackName}-access-policy'
+      Name: 
+        Fn::Join:
+          - '-'
+          - - 'access-policy'
+            - Fn::Select:
+                - 1
+                - Fn::Split:
+                    - '-'
+                    - Fn::Select:
+                        - '-1'
+                        - Fn::Split:
+                            - '-'
+                            - !Ref 'AWS::StackName'
       Type: data
       Description: !Sub 'Access policy for ${AWS::StackName} collection'
       Policy: !Sub |
