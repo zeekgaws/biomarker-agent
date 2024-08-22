@@ -483,6 +483,7 @@ Resources:
                 "Type": "Succeed"
               }
             }
+          }
 
         - {
             S3Bucket: !Sub "s3://${S3Bucket}",
