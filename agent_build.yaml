@@ -1487,7 +1487,7 @@ Resources:
   BedrockKBExecutionRole:
     Type: 'AWS::IAM::Role'
     Properties:
-      RoleName: !Sub 'AmazonBedrockExecutionRoleForKnowledgeBase_${AWS::StackName}'
+      RoleName: !Sub 'AmazonBedrockExecutionRoleForKnowledgeBase_${EnvironmentName}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
