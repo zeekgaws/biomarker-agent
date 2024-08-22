@@ -166,9 +166,16 @@ def extract_table_columns(query):
     table_columns = defaultdict(list)
 
     for record in query["Records"]:
-        table_name = record[0]["stringValue"]
-        column_name = record[1]["stringValue"]
-        table_columns[table_name].append(column_name)
+            table_name = record[0]["stringValue"]
+            column_name = record[1]["stringValue"]
+            column_type = record[2]["stringValue"]
+            column_comment = record[3]["stringValue"]
+            column_details = {
+                "name": column_name,
+                "type": column_type,
+                "comment": column_comment
+            }
+            table_columns[table_name].append(column_details)
     return dict(table_columns)
 
 # Upload result to S3 
