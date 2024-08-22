@@ -1539,17 +1539,16 @@ Resources:
         Fn::Join:
           - '-'
           - - 'encryption-policy'
-            - !Select 
-              - 0
-              - !Split
+            - Fn::Select:
+              - 1
+              - Fn::Split:
                 - '-'
-                - !Select
-                  - '-1'
-                  - !Split
+                - Fn::Select:
+                  - 5
+                  - Fn::Join:
                     - '-'
-                    - !Select 
-                      - '-6'
-                      - !Join ['', ['------', !Ref 'AWS::StackName']]
+                    - - '000'
+                      - !Ref 'AWS::StackName'
       Type: encryption
       Description: !Sub 'Encryption policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1570,17 +1569,16 @@ Resources:
         Fn::Join:
           - '-'
           - - 'network-policy'
-            - !Select 
-              - 0
-              - !Split
+            - Fn::Select:
+              - 1
+              - Fn::Split:
                 - '-'
-                - !Select
-                  - '-1'
-                  - !Split
+                - Fn::Select:
+                  - 5
+                  - Fn::Join:
                     - '-'
-                    - !Select 
-                      - '-6'
-                      - !Join ['', ['------', !Ref 'AWS::StackName']]
+                    - - '000'
+                      - !Ref 'AWS::StackName'
       Type: network
       Description: !Sub 'Network policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1602,17 +1600,16 @@ Resources:
       Name: 
         Fn::Join:
           - '-'
-          - - !Select 
-              - 0
-              - !Split
+          - - Fn::Select:
+              - 1
+              - Fn::Split:
                 - '-'
-                - !Select
-                  - '-1'
-                  - !Split
+                - Fn::Select:
+                  - 5
+                  - Fn::Join:
                     - '-'
-                    - !Select 
-                      - '-6'
-                      - !Join ['', ['------', !Ref 'AWS::StackName']]
+                    - - '000'
+                      - !Ref 'AWS::StackName'
             - !Ref 'VectorStoreName'
       Type: VECTORSEARCH
       Description: !Sub 'Collection to hold vector for ${AWS::StackName}'
@@ -1813,17 +1810,16 @@ Resources:
         Fn::Join:
           - '-'
           - - 'access-policy'
-            - !Select 
-              - 0
-              - !Split
+            - Fn::Select:
+              - 1
+              - Fn::Split:
                 - '-'
-                - !Select
-                  - '-1'
-                  - !Split
+                - Fn::Select:
+                  - 5
+                  - Fn::Join:
                     - '-'
-                    - !Select 
-                      - '-6'
-                      - !Join ['', ['------', !Ref 'AWS::StackName']]
+                    - - '000'
+                      - !Ref 'AWS::StackName'
       Type: data
       Description: !Sub 'Access policy for ${AWS::StackName} collection'
       Policy: !Sub |
