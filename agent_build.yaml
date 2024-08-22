@@ -8,8 +8,11 @@ Parameters:
     Default: anthropic.claude-3-sonnet-20240229-v1:0
   EnvironmentName:
     Type: String
-    Description: The name of the agent environment, used to differenciate agent application, name must be lowercase.
-    Default: research-assist-env
+    Description: The name of the agent environment, used to differentiate agent application. Must be lowercase, contain one number, and be no more than 5 characters long.
+    Default: env1
+    MaxLength: 5
+    AllowedPattern: ^[a-z]{1,4}[0-9]$
+    ConstraintDescription: Must be lowercase, contain one number at the end, and be no more than 5 characters long.
   GitRepoURL:
     Type: String
     Default: https://github.com/zeekgaws/biomarker-agent.git
@@ -1543,7 +1546,7 @@ Resources:
           "Rules": [
             {
               "ResourceType": "collection",
-              "Resource": ["collection/${AWS::StackName}-${VectorStoreName}"]
+              "Resource": ["collection/${EnvironmentName}-${VectorStoreName}"]
             }
           ],
           "AWSOwnedKey": true
@@ -1561,7 +1564,7 @@ Resources:
             "Rules": [
               {
                 "ResourceType": "collection",
-                "Resource": ["collection/${AWS::StackName}-${VectorStoreName}"]
+                "Resource": ["collection/${EnvironmentName}-${VectorStoreName}"]
               }
             ],
             "AllowFromPublic": true
@@ -1777,7 +1780,7 @@ Resources:
             "Rules": [
               {
                 "ResourceType": "collection",
-                "Resource": ["collection/${AWS::StackName}-${VectorStoreName}"],
+                "Resource": ["collection/${EnvironmentName}-${VectorStoreName}"],
                 "Permission": [
                   "aoss:CreateCollectionItems",
                   "aoss:DeleteCollectionItems",
@@ -1787,7 +1790,7 @@ Resources:
               },
               {
                 "ResourceType": "index",
-                "Resource": ["index/${AWS::StackName}-${VectorStoreName}/*"],
+                "Resource": ["index/${EnvironmentName}-${VectorStoreName}/*"],
                 "Permission": [
                   "aoss:CreateIndex",
                   "aoss:DeleteIndex",
