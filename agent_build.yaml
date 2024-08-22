@@ -1129,7 +1129,9 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:Retrieve
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+                Resource: 
+                  - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
       
   ########################
   ##### ActionGroup #####
@@ -1583,7 +1585,6 @@ Resources:
           - Effect: Allow
             Action:
             - bedrock:InvokeModel
-            - bedrock:Retrieve
             Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
             Sid: BedrockInvokeModelStatement
       - PolicyName: OSSPolicy
