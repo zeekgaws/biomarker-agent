@@ -1545,10 +1545,9 @@ Resources:
                 - '-'
                 - Fn::Select:
                   - 5
-                  - Fn::Join:
+                  - Fn::Split:
                     - '-'
-                    - - '000'
-                      - !Ref 'AWS::StackName'
+                    - !Ref 'AWS::StackName'
       Type: encryption
       Description: !Sub 'Encryption policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1575,10 +1574,9 @@ Resources:
                 - '-'
                 - Fn::Select:
                   - 5
-                  - Fn::Join:
+                  - Fn::Split:
                     - '-'
-                    - - '000'
-                      - !Ref 'AWS::StackName'
+                    - !Ref 'AWS::StackName'
       Type: network
       Description: !Sub 'Network policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1606,10 +1604,9 @@ Resources:
                 - '-'
                 - Fn::Select:
                   - 5
-                  - Fn::Join:
+                  - Fn::Split:
                     - '-'
-                    - - '000'
-                      - !Ref 'AWS::StackName'
+                    - !Ref 'AWS::StackName'
             - !Ref 'VectorStoreName'
       Type: VECTORSEARCH
       Description: !Sub 'Collection to hold vector for ${AWS::StackName}'
@@ -1816,10 +1813,9 @@ Resources:
                 - '-'
                 - Fn::Select:
                   - 5
-                  - Fn::Join:
+                  - Fn::Split:
                     - '-'
-                    - - '000'
-                      - !Ref 'AWS::StackName'
+                    - !Ref 'AWS::StackName'
       Type: data
       Description: !Sub 'Access policy for ${AWS::StackName} collection'
       Policy: !Sub |
