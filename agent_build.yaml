@@ -1063,7 +1063,7 @@ Resources:
     Properties:
       Runtime: python3.12
       FunctionName: !Sub biomarker-agent-${EnvironmentName}
-      Handler: index.lambda_handler
+      Handler: querydatabaselambda.lambda_handler
       Role: !GetAtt AgentLambdaRole.Arn
       Timeout: 900
       Environment:
