@@ -1535,19 +1535,7 @@ Resources:
   EncryptionPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
-      Name: 
-        Fn::Join:
-          - '-'
-          - - 'encryption-policy'
-            - Fn::Select:
-              - 1
-              - Fn::Split:
-                - '-'
-                - Fn::Select:
-                  - 5
-                  - Fn::Split:
-                    - '-'
-                    - !Ref 'AWS::StackName'
+      Name: !Sub '${EnvironmentName}-encryption-policy'
       Type: encryption
       Description: !Sub 'Encryption policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1564,19 +1552,7 @@ Resources:
   NetworkPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
-      Name: 
-        Fn::Join:
-          - '-'
-          - - 'network-policy'
-            - Fn::Select:
-              - 1
-              - Fn::Split:
-                - '-'
-                - Fn::Select:
-                  - 5
-                  - Fn::Split:
-                    - '-'
-                    - !Ref 'AWS::StackName'
+      Name: !Sub '${EnvironmentName}-network-policy'
       Type: network
       Description: !Sub 'Network policy for ${AWS::StackName} collection'
       Policy: !Sub |
@@ -1595,19 +1571,7 @@ Resources:
   Collection:
     Type: 'AWS::OpenSearchServerless::Collection'
     Properties:
-      Name: 
-        Fn::Join:
-          - '-'
-          - - Fn::Select:
-              - 1
-              - Fn::Split:
-                - '-'
-                - Fn::Select:
-                  - 5
-                  - Fn::Split:
-                    - '-'
-                    - !Ref 'AWS::StackName'
-            - !Ref 'VectorStoreName'
+      Name: !Sub '${EnvironmentName}-${VectorStoreName}'
       Type: VECTORSEARCH
       Description: !Sub 'Collection to hold vector for ${AWS::StackName}'
     DependsOn: 
@@ -1803,19 +1767,8 @@ Resources:
   DataAccessPolicy:
     Type: 'AWS::OpenSearchServerless::AccessPolicy'
     Properties:
-      Name: 
-        Fn::Join:
-          - '-'
-          - - 'access-policy'
-            - Fn::Select:
-              - 1
-              - Fn::Split:
-                - '-'
-                - Fn::Select:
-                  - 5
-                  - Fn::Split:
-                    - '-'
-                    - !Ref 'AWS::StackName'
+      Name: !Sub '${EnvironmentName}-access-policy'
+            
       Type: data
       Description: !Sub 'Access policy for ${AWS::StackName} collection'
       Policy: !Sub |
