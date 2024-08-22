@@ -10,47 +10,50 @@ import xmltodict
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel("INFO")
 
-
-class PubMed:
+class PubMed():
     """
     Calls pubmed API to fetch biomedical literature.
-
+    
     """
-
-    base_url_esearch: str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?"
+    base_url_esearch: str = (
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?"
+    )
     base_url_efetch: str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?"
     max_retry: int = 5
     sleep_time: float = 0.2
-
+    
+    top_k_results: int = 5
     MAX_QUERY_LENGTH: int = 300
+    doc_content_chars_max: int = 10000
+    email: str = "email@example.com"
 
-    def run(self, query: str, count: int, max_size: int) -> str:
+
+    
+    def run(self, query: str) -> str:
         """
         Run PubMed search and get the article meta information.
         """
 
         try:
             docs = []
-            for result in self.load(query[: self.MAX_QUERY_LENGTH], count):
-                docs.append(
-                    {
-                        "Published": result["Published"],
-                        "Title": result["Title"],
-                        "Summary": result["Summary"],
-                    }
-                )
-                if len(str(docs).encode()) > max_size:
-                    docs.pop()
-                    break
+            for result in self.load(query[: self.MAX_QUERY_LENGTH]):
+                docs.append({
+                    "Link": 'https://pubmed.ncbi.nlm.nih.gov/' + result["uid"],
+                    "Published": result["Published"],
+                    "Title": result["Title"],
+                    "Summary": result["Summary"]
+                })
 
-            # Join the results and limit the character count
-            return docs if docs else "No good PubMed Result was found"
+            return (
+                docs
+                if docs
+                else "No good PubMed Result was found"
+            )
         except Exception as ex:
             return f"PubMed exception: {ex}"
-
-    def lazy_load(self, query: str, count: int) -> Iterator[dict]:
+            
+    def lazy_load(self, query: str) -> Iterator[dict]:
         """
         Search PubMed for documents matching the query.
         Return an iterator of dictionaries containing the document metadata.
@@ -60,7 +63,7 @@ class PubMed:
             self.base_url_esearch
             + "db=pubmed&term="
             + str({urllib.parse.quote(query)})
-            + f"&retmode=json&retmax={count}&usehistory=y"
+            + f"&retmode=json&retmax={self.top_k_results}&usehistory=y"
         )
         result = urllib.request.urlopen(url)
         text = result.read().decode("utf-8")
@@ -70,15 +73,23 @@ class PubMed:
         for uid in json_text["esearchresult"]["idlist"]:
             yield self.retrieve_article(uid, webenv)
 
-    def load(self, query: str, count: int) -> List[dict]:
+    def load(self, query: str) -> List[dict]:
         """
         Search PubMed for documents matching the query.
         Return a list of dictionaries containing the document metadata.
         """
-        return list(self.lazy_load(query, count))
+        data = list(self.lazy_load(query))
+        # return list(self.lazy_load(query))
+        return data
 
     def retrieve_article(self, uid: str, webenv: str) -> dict:
-        url = self.base_url_efetch + "db=pubmed&retmode=xml&id=" + uid + "&webenv=" + webenv
+        url = (
+            self.base_url_efetch
+            + "db=pubmed&retmode=xml&id="
+            + uid
+            + "&webenv="
+            + webenv
+        )
 
         retry = 0
         while True:
@@ -89,8 +100,9 @@ class PubMed:
                 if e.code == 429 and retry < self.max_retry:
                     # Too Many Requests errors
                     # wait for an exponentially increasing amount of time
-                    logger.warning(
-                        f"Too Many Requests, " f"waiting for {self.sleep_time:.2f} seconds..."
+                    logger.warning( 
+                        f"Too Many Requests, "
+                        f"waiting for {self.sleep_time:.2f} seconds..."
                     )
                     time.sleep(self.sleep_time)
                     self.sleep_time *= 2
@@ -104,7 +116,9 @@ class PubMed:
 
     def _parse_article(self, uid: str, text_dict: dict) -> dict:
         try:
-            ar = text_dict["PubmedArticleSet"]["PubmedArticle"]["MedlineCitation"]["Article"]
+            ar = text_dict["PubmedArticleSet"]["PubmedArticle"]["MedlineCitation"][
+                "Article"
+            ]
         except KeyError:
             ar = text_dict["PubmedArticleSet"]["PubmedBookArticle"]["BookDocument"]
         abstract_text = ar.get("Abstract", {}).get("AbstractText", [])
@@ -127,15 +141,16 @@ class PubMed:
             )
         )
         a_d = ar.get("ArticleDate", {})
-        pub_date = "-".join([a_d.get("Year", ""), a_d.get("Month", ""), a_d.get("Day", "")])
-
-        ## Reset throttling sleep timer after back off
-        self.sleep_time = 0.2
+        pub_date = "-".join(
+            [a_d.get("Year", ""), a_d.get("Month", ""), a_d.get("Day", "")]
+        )
 
         return {
             "uid": uid,
             "Title": ar.get("ArticleTitle", ""),
             "Published": pub_date,
-            "Copyright Information": ar.get("Abstract", {}).get("CopyrightInformation", ""),
+            "Copyright Information": ar.get("Abstract", {}).get(
+                "CopyrightInformation", ""
+            ),
             "Summary": summary,
         }
