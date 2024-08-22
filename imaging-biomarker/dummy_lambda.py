@@ -8,7 +8,9 @@ import os
 
 # Get environment variables
 sfn_statemachine_name = os.environ['SFN_STATEMACHINE_NAME']
-feature_store_name = os.environ['FEATURE_STORE_NAME']
+s3bucket = os.environ['S3BUCKET']
+bucketname = s3bucket.replace("s3://", "")
+
 
 logger = logging.getLogger()
 logger.setLevel("INFO")
@@ -39,7 +41,7 @@ def lambda_handler(event, context):
             
             processing_job_name = f'dcm-nifti-conversion-{suffix}'
 
-            output_data_uri = f's3://sagemaker-{region}-{account_id}/nsclc_radiogenomics'
+            output_data_uri = f'{s3bucket}'
 
 
             payload = {
@@ -73,8 +75,8 @@ def lambda_handler(event, context):
             if param["name"] == "subject_id":
                 subject_id = json.loads(param["value"])
                 for id in subject_id:
-                    output_data_uri = f's3://sagemaker-{region}-{account_id}/nsclc_radiogenomics/'
-                    bucket_name = f'sagemaker-{region}-{account_id}'
+                    output_data_uri = f'{s3bucket}/nsclc_radiogenomics/'
+                    bucket_name = bucketname
                     object_key = f'nsclc_radiogenomics/CSV/{id}.csv'
                     try:
                         print(object_key)
