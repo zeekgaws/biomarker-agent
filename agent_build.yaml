@@ -364,78 +364,126 @@ Resources:
       DefinitionString: !Sub
         - |
           {
-            "Comment": "NSCLC Radiogenomics Imaging Workflow",
-            "StartAt": "ProcessImages",
+            "StartAt": "iterate_over_subjects",
             "States": {
-              "ProcessImages": {
-                "Type": "Task",
-                "Resource": "arn:aws:states:::sagemaker:createProcessingJob.sync",
-                "Parameters": {
-                  "ProcessingJobName.$": "States.Format('ImagingJob-{}', $$.Execution.Name)",
-                  "ProcessingInputs": [
-                    {
-                      "InputName": "input-1",
-                      "S3Input": {
-                        "S3Uri": "${S3Bucket}/input",
-                        "LocalPath": "/opt/ml/processing/input",
-                        "S3DataType": "S3Prefix",
-                        "S3InputMode": "File"
-                      }
-                    }
-                  ],
-                  "ProcessingOutputConfig": {
-                    "Outputs": [
-                      {
-                        "OutputName": "output-1",
-                        "S3Output": {
-                          "S3Uri": "${S3Bucket}/output",
-                          "LocalPath": "/opt/ml/processing/output",
-                          "S3UploadMode": "EndOfJob"
+              "iterate_over_subjects": {
+                "ItemsPath": "$.Subject",
+                "MaxConcurrency": 50,
+                "Type": "Map",
+                "Next": "Finish",
+                "Iterator": {
+                  "StartAt": "DICOM/NIfTI Conversion and Radiomic Feature Extraction",
+                  "States": {
+                    "Fallback": {
+                      "Type": "Pass",
+                      "Result": "This iteration failed for some reason",
+                      "End": true
+                    },
+                    "DICOM/NIfTI Conversion and Radiomic Feature Extraction": {
+                      "Type": "Task",
+                      "OutputPath": "$.ProcessingJobArn",
+                      "Resource": "arn:aws:states:::sagemaker:createProcessingJob.sync",
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "SageMaker.AmazonSageMakerException"
+                          ],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 8,
+                          "BackoffRate": 1.5
                         }
-                      }
-                    ]
-                  },
-                  "ProcessingResources": {
-                    "ClusterConfig": {
-                      "InstanceCount": 1,
-                      "InstanceType": "ml.m5.xlarge",
-                      "VolumeSizeInGB": 30
+                      ],
+                      "Catch": [
+                        {
+                          "ErrorEquals": [
+                            "States.TaskFailed"
+                          ],
+                          "Next": "Fallback"
+                        }
+                      ],
+                      "Parameters": {
+                        "ProcessingJobName.$": "States.Format('{}-{}', $$.Execution.Input['PreprocessingJobName'], $)",
+                        "ProcessingInputs": [
+                          {
+                            "InputName": "DICOM",
+                            "AppManaged": false,
+                            "S3Input": {
+                              "S3Uri.$": "States.Format('${S3Bucket}/nsclc_radiogenomics/input' , $)",
+                              "LocalPath": "/opt/ml/processing/input",
+                              "S3DataType": "S3Prefix",
+                              "S3InputMode": "File",
+                              "S3DataDistributionType": "FullyReplicated",
+                              "S3CompressionType": "None"
+                            }
+                          }
+                        ],
+                        "ProcessingOutputConfig": {
+                          "Outputs": [
+                            {
+                              "OutputName": "CT-Nifti",
+                              "AppManaged": false,
+                              "S3Output": {
+                                "S3Uri": "${S3Bucket}/nsclc_radiogenomics/CT-Nifti",
+                                "LocalPath": "/opt/ml/processing/output/CT-Nifti",
+                                "S3UploadMode": "EndOfJob"
+                              }
+                            },
+                            {
+                              "OutputName": "CT-SEG",
+                              "AppManaged": false,
+                              "S3Output": {
+                                "S3Uri": "${S3Bucket}/nsclc_radiogenomics/CT-SEG",
+                                "LocalPath": "/opt/ml/processing/output/CT-SEG",
+                                "S3UploadMode": "EndOfJob"
+                              }
+                            },
+                            {
+                              "OutputName": "PNG",
+                              "AppManaged": false,
+                              "S3Output": {
+                                "S3Uri": "${S3Bucket}/nsclc_radiogenomics/PNG",
+                                "LocalPath": "/opt/ml/processing/output/PNG",
+                                "S3UploadMode": "EndOfJob"
+                              }
+                            },
+                            {
+                              "OutputName": "CSV",
+                              "AppManaged": false,
+                              "S3Output": {
+                                "S3Uri": "${S3Bucket}/nsclc_radiogenomics/CSV",
+                                "LocalPath": "/opt/ml/processing/output/CSV",
+                                "S3UploadMode": "EndOfJob"
+                              }
+                            }
+                          ]
+                        },
+                        "AppSpecification": {
+                          "ImageUri": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}",
+                          "ContainerArguments.$": "States.Array('--subject', $)",
+                          "ContainerEntrypoint": [
+                            "python3",
+                            "/opt/dcm2nifti_processing.py"
+                          ]
+                        },
+                        "RoleArn": "${SageMakerExecutionRoleArn}",
+                        "ProcessingResources": {
+                          "ClusterConfig": {
+                            "InstanceCount": 1,
+                            "InstanceType": "ml.m5.xlarge",
+                            "VolumeSizeInGB": 5
+                          }
+                        }
+                      },
+                      "End": true
                     }
-                  },
-                  "StoppingCondition": {
-                    "MaxRuntimeInSeconds": 7200
-                  },
-                  "AppSpecification": {
-                    "ImageUri": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ImagingECRRepository}:${ImageTag}"
-                  },
-                  "RoleArn": "${SageMakerExecutionRoleArn}"
-                },
-                "Retry": [
-                  {
-                    "ErrorEquals": ["SageMaker.AmazonSageMakerException"],
-                    "IntervalSeconds": 15,
-                    "MaxAttempts": 8,
-                    "BackoffRate": 1.5
                   }
-                ],
-                "Catch": [
-                  {
-                    "ErrorEquals": ["States.TaskFailed"],
-                    "Next": "Fallback"
-                  }
-                ],
-                "Next": "Finish"
-              },
-              "Fallback": {
-                "Type": "Pass",
-                "Result": "The imaging processing job failed",
-                "Next": "Finish"
+                }
               },
               "Finish": {
                 "Type": "Succeed"
               }
             }
-          }
+
         - {
             S3Bucket: !Sub "s3://${S3Bucket}",
             SageMakerExecutionRoleArn: !GetAtt SageMakerExecutionRole.Arn
@@ -852,11 +900,11 @@ Resources:
                               }
                           }
                       },
-                      "/refineesql": {
+                      "/refinesql": {
                           "post": {
                             "summary": "Evaluate SQL query efficiency",
                             "description": "Evaluate the efficiency of an SQL query based on the provided schema, query, and question.",
-                            "operationId": "evaluatesql",
+                            "operationId": "refinesql",
                             "requestBody": {
                               "required": true,
                               "content": {
