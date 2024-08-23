@@ -195,7 +195,7 @@ def lambda_handler(event, context):
         raw_schema = get_schema()
         result = extract_table_columns(raw_schema)
 
-    if event['apiPath'] == "/refineesql":
+    if event['apiPath'] == "/refinesql":
         question = event['requestBody']['content']['application/json']['properties'][0]['value']
         sql = event['requestBody']['content']['application/json']['properties'][1]['value']
         result = refineSQL(question, sql)
