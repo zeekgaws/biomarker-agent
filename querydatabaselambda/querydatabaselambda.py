@@ -5,12 +5,14 @@ import uuid
 import json
 import sys
 from collections import defaultdict
+
 redshift_client = boto3.client('redshift-data')
 
-def refineSQL(sql,question):
-    schema = get_schema()
+def refineSQL(sql, question):
+    raw_schema = get_schema()
+    schema = extract_table_columns(raw_schema)
     
-    prompt= f"""
+    prompt = f"""
     Here is the schema <schema>{json.dumps(schema)}</schema>
     Pay attention to the accepted values and the column data type located in the comment field for each column.
 
@@ -24,63 +26,35 @@ def refineSQL(sql,question):
     <example>
     question: What is the survival status for patients who has undergone chemotherapy
     
-    
     Inefficient SQL Query:
-    SELECT chemotherapy, survival_status \nFROM dev.public.lung_cancer_cases\nWHERE chemotherapy = 'Yes';
+    SELECT chemotherapy, survival_status FROM dev.public.lung_cancer_cases WHERE chemotherapy = 'Yes';
     
     Reason: This is inefficient because it does not provide a more concise and informative output that directly answers the question. It results in a larger output size, does not aggregate the data, and presents the results in a difficult format that is not easy to analyze and interpret.
     
-    This query will give you the count of patients for each survival status (Alive or Dead) who have undergone chemotherapy.
-    
-    The main differences are:
-    
-    1. It only selects the `survival_status` column, since that's the information needed to answer the question. The `chemotherapy` column is not needed in the output.
-    
-    2. It uses `COUNT(*)` and `GROUP BY` to aggregate and count the records for each distinct value of `survival_status`. This allows you to see the number of patients for each survival status in a single result set, rather than having to count them manually from the output.
-    
-    By aggregating the data using `COUNT` and `GROUP BY`, you can get a more concise and informative result, making it easier to analyze the survival status distribution for patients who have undergone chemotherapy.
-    
-    
     Efficient SQL Query:
+    SELECT survival_status, COUNT(*) AS count FROM dev.public.lung_cancer_cases WHERE chemotherapy = 'Yes' GROUP BY survival_status;
     
-    SELECT survival_status, COUNT(*) AS count
-    FROM dev.public.lung_cancer_cases
-    WHERE chemotherapy = 'Yes'
-    GROUP BY survival_status;
+    Reason: This query will give you the count of patients for each survival status (Alive or Dead) who have undergone chemotherapy. It uses COUNT(*) and GROUP BY to aggregate and count the records for each distinct value of survival_status, providing a more concise and informative result.
     
-    Reason: 
-    This query will give you the count of patients for each survival status (Alive or Dead) who have undergone chemotherapy.
-    
-    The main differences are:
-    
-    1. It only selects the `survival_status` column, since that's the information needed to answer the question. The `chemotherapy` column is not needed in the output.
-    
-    2. It uses `COUNT(*)` and `GROUP BY` to aggregate and count the records for each distinct value of `survival_status`. This allows you to see the number of patients for each survival status in a single result set, rather than having to count them manually from the output.
-    
-    By aggregating the data using `COUNT` and `GROUP BY`, you can get a more concise and informative result, making it easier to analyze the survival status distribution for patients who have undergone chemotherapy.
-    
-</example>
-<outputrule>do not use next line characters in the generated sql</outputrule>
+    </example>
+    <outputrule>do not use next line characters in the generated sql</outputrule>
     """
     client = boto3.client('bedrock-runtime')
-    user_message= { "role": "user","content": prompt }
+    user_message = {"role": "user", "content": prompt}
     claude_response = {"role": "assistant", "content": "<efficientQuery>"}
-    model_Id='anthropic.claude-3-sonnet-20240229-v1:0'
-    messages = [user_message,claude_response]
-    system_prompt = "You are an extremly critical sql query evaluation assistant, your job is to look at the schema, sql query and question being asked to then evaluate the query to ensure it is efficient."
-    max_tokens=1000
+    model_Id = 'anthropic.claude-3-sonnet-20240229-v1:0'
+    messages = [user_message, claude_response]
+    system_prompt = "You are an extremely critical sql query evaluation assistant, your job is to look at the schema, sql query and question being asked to then evaluate the query to ensure it is efficient."
+    max_tokens = 1000
     
-    body=json.dumps(
-            {
-                "messages": messages,
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "system": system_prompt
-            
-            }  
-        )  
+    body = json.dumps({
+        "messages": messages,
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "system": system_prompt
+    })
     
-    response = client.invoke_model(body=body,modelId=model_Id)
+    response = client.invoke_model(body=body, modelId=model_Id)
     response_bytes = response.get("body").read()
     response_text = response_bytes.decode('utf-8')
     response_json = json.loads(response_text)
@@ -91,13 +65,10 @@ def refineSQL(sql,question):
             print(result_text)
             return result_text
     
-    
     return "No SQL found in response"
 
-
 def get_schema():
-    #Schema retrieval is hardcoded temporarily but also to make agent faster
-    sql ="""
+    sql = """
         SELECT
             'clinical_genomic' AS table_name,
             a.attname AS column_name,
@@ -125,15 +96,15 @@ def get_schema():
                     print("SQL statement execution failed or was cancelled.")
                     break
                 print("Waiting for SQL statement execution to complete...")
-                time.sleep(5)  # Wait for 5 seconds before checking the status again
+                time.sleep(5)
         
         wait_for_query_completion(result['Id'])
         
-        # Retrieve the SQL result
         response = redshift_client.get_statement_result(Id=result['Id'])
         return response
     except Exception as e:
         print("Error:", e)
+        raise
 
 def query_redshift(query):
     try:
@@ -151,88 +122,91 @@ def query_redshift(query):
                     print("SQL statement execution failed or was cancelled.")
                     break
                 print("Waiting for SQL statement execution to complete...")
-                time.sleep(5)  # Wait for 5 seconds before checking the status again
+                time.sleep(5)
         
         wait_for_query_completion(result['Id'])
         
-        # Retrieve the SQL result
         response = redshift_client.get_statement_result(Id=result['Id'])
         return response
     except Exception as e:
         print("Error:", e)
+        raise
 
-# Clean response to send to model
 def extract_table_columns(query):
     table_columns = defaultdict(list)
-
     for record in query["Records"]:
-            table_name = record[0]["stringValue"]
-            column_name = record[1]["stringValue"]
-            column_type = record[2]["stringValue"]
-            column_comment = record[3]["stringValue"]
-            column_details = {
-                "name": column_name,
-                "type": column_type,
-                "comment": column_comment
-            }
-            table_columns[table_name].append(column_details)
+        table_name = record[0]["stringValue"]
+        column_name = record[1]["stringValue"]
+        column_type = record[2]["stringValue"]
+        column_comment = record[3]["stringValue"]
+        column_details = {
+            "name": column_name,
+            "type": column_type,
+            "comment": column_comment
+        }
+        table_columns[table_name].append(column_details)
     return dict(table_columns)
 
-# Upload result to S3 
 def upload_result_s3(result, bucket, key):
     s3 = boto3.resource('s3')
     s3object = s3.Object(bucket, key)
-    s3object.put(
-    Body=(bytes(json.dumps(result).encode('UTF-8')))
-    )
-    return(s3object)
+    s3object.put(Body=(bytes(json.dumps(result).encode('UTF-8'))))
+    return s3object
 
 def lambda_handler(event, context):
-
     result = None
-    
-    if event['apiPath'] == "/getschema":
-        raw_schema = get_schema()
-        result = extract_table_columns(raw_schema)
+    error_message = None
 
-    if event['apiPath'] == "/refinesql":
-        question = event['requestBody']['content']['application/json']['properties'][0]['value']
-        sql = event['requestBody']['content']['application/json']['properties'][1]['value']
-        result = refineSQL(question, sql)
-    
-    if event['apiPath'] == "/queryredshift":
-        query = event['requestBody']['content']['application/json']['properties'][0]['value']
-        result = query_redshift(query)
+    try:
+        if event['apiPath'] == "/getschema":
+            raw_schema = get_schema()
+            result = extract_table_columns(raw_schema)
 
-    # Example: Print or return the result
-    if result:
-        print("Query Result:", result)
-    
-    else:
-        result="Query Failed."
+        elif event['apiPath'] == "/refinesql":
+            question = event['requestBody']['content']['application/json']['properties'][0]['value']
+            sql = event['requestBody']['content']['application/json']['properties'][1]['value']
+            result = refineSQL(sql, question)
+        
+        elif event['apiPath'] == "/queryredshift":
+            query = event['requestBody']['content']['application/json']['properties'][0]['value']
+            result = query_redshift(query)
 
-    #Upload result to S3 if response size is too large
+        else:
+            raise ValueError(f"Unknown apiPath: {event['apiPath']}")
+
+        if result:
+            print("Query Result:", result)
+    
+    except Exception as e:
+        error_message = str(e)
+        print(f"Error occurred: {error_message}")
+
     BUCKET_NAME = os.environ['BUCKET_NAME']
-    KEY= str(uuid.uuid4()) + '.json'
-    size = sys.getsizeof(str(result))
-    print(size)
-    if size > 20000:
-        print('size greater than 20KB, hence writing to a file in S3')
-        result = upload_result_s3(result, BUCKET_NAME, KEY)
-
+    KEY = str(uuid.uuid4()) + '.json'
+    size = sys.getsizeof(str(result)) if result else 0
+    print(f"Response size: {size} bytes")
     
-    response_body = {
-    'application/json': {
-        'body':str(result)
-    }
-}
+    if size > 20000:
+        print('Size greater than 20KB, writing to a file in S3')
+        result = upload_result_s3(result, BUCKET_NAME, KEY)
+        response_body = {
+            'application/json': {
+                'body': f"Result uploaded to S3. Bucket: {BUCKET_NAME}, Key: {KEY}"
+            }
+        }
+    else:
+        response_body = {
+            'application/json': {
+                'body': str(result) if result else error_message
+            }
+        }
 
     action_response = {
-    'actionGroup': event['actionGroup'],
-    'apiPath': event['apiPath'],
-    'httpMethod': event['httpMethod'],
-    'httpStatusCode': 200,
-    'responseBody': response_body
+        'actionGroup': event['actionGroup'],
+        'apiPath': event['apiPath'],
+        'httpMethod': event['httpMethod'],
+        'httpStatusCode': 200 if result else 500,
+        'responseBody': response_body
     }
 
     session_attributes = event['sessionAttributes']
