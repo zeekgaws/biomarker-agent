@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY . .
 
+RUN pip install ipython
+
 RUN pip3 install -r requirements.txt
 
 EXPOSE 80
