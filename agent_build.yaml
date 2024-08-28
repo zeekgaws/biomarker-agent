@@ -408,7 +408,7 @@ Resources:
                             "InputName": "DICOM",
                             "AppManaged": false,
                             "S3Input": {
-                              "S3Uri.$": "States.Format('s3://sagemaker-solutions-prod-us-east-1/sagemaker-lung-cancer-survival-prediction/1.1.0/data/nsclc_radiogenomics/{}'' , $)",
+                              "S3Uri.$": "States.Format('${S3Bucket}/nsclc_radiogenomics/input/{}' , $)",
                               "LocalPath": "/opt/ml/processing/input",
                               "S3DataType": "S3Prefix",
                               "S3InputMode": "File",
@@ -1934,5 +1934,3 @@ Resources:
           FixedSizeChunkingConfiguration:
             MaxTokens: 300
             OverlapPercentage: 20
-            
-
