@@ -178,16 +178,12 @@ class BedrockAgent:
     def cleanup_temp_files(self):
         shutil.rmtree(self.temp_dir)
         self.temp_dir = tempfile.mkdtemp()
-    
+     
     def get_s3_image(self, invocation_id):
         try:
-            
-            self.s3_client = (
-            Session()
-            .client("s3"))
+            self.s3_client = Session().client("s3")
             s3_key = f'graphs/invocationID/{invocation_id}/KMplot.png'
-            
-            
+
             response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=s3_key)
             image_content = response['Body'].read()
 
@@ -201,6 +197,9 @@ class BedrockAgent:
                 'type': 'image/png',
                 'path': temp_image_path
             }
+        except self.s3_client.exceptions.NoSuchKey:
+            # Handle the case when no KM plot graphs are found
+            return {"error": "No KM plot graphs found for this invocation ID."}
         except Exception as e:
-            st.error(f"Error fetching image from S3: {str(e)}")
-            return None
+            # Handle other exceptions
+            return {"error": f"Error fetching image from S3: {str(e)}"}
