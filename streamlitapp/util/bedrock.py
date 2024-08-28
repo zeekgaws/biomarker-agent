@@ -3,11 +3,11 @@ from botocore.config import Config
 from boto3.session import Session
 import uuid
 import json
-from IPython.display import display, Markdown
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import os
-
+import tempfile
+import shutil
+from io import BytesIO
+from PIL import Image
 
 class BedrockAgent:
     """BedrockAgent class for invoking an Anthropic AI agent.
@@ -33,8 +33,7 @@ class BedrockAgent:
     Requires streamlit and boto3. Authentication requires credentials configured
     in secrets management.
     """
-  
-    def __init__(self, environment_name) -> None:
+    def __init__(self, environmentName) -> None:
         if "BEDROCK_RUNTIME_CLIENT" not in st.session_state:
             st.session_state["BEDROCK_RUNTIME_CLIENT"] = Session().client(
                 "bedrock-agent-runtime", config=Config(read_timeout=600)
@@ -47,113 +46,161 @@ class BedrockAgent:
             Session()
             .client("ssm")
             .get_parameter(
-                Name=f"/streamlitapp/{environment_name}/AGENT_ID", WithDecryption=True
+                Name=f"/streamlitapp/{environmentName}/AGENT_ID", WithDecryption=True
             )["Parameter"]["Value"]
         )
         self.agent_alias_id = (
             Session()
             .client("ssm")
             .get_parameter(
-                Name=f"/streamlitapp/{environment_name}/AGENT_ALIAS_ID",
+                Name=f"/streamlitapp/{environmentName}/AGENT_ALIAS_ID",
                 WithDecryption=True,
             )["Parameter"]["Value"]
         )
        
+
         self.s3_bucket_name = (
             Session()
             .client("ssm")
             .get_parameter(
-                Name=f"/streamlitapp/{environment_name}/S3_BUCKET_NAME",
+                Name=f"/streamlitapp/{environmentName}/S3_BUCKET_NAME",
                 WithDecryption=True,
             )["Parameter"]["Value"]
         )
+
+        
+        self.temp_dir = tempfile.mkdtemp()
 
 
     def new_session(self):
         st.session_state["SESSION_ID"] = str(uuid.uuid1())
 
     def invoke_agent(self, input_text, trace):
-
         response_text = ""
         trace_text = ""
         step = 0
-
-        response = st.session_state["BEDROCK_RUNTIME_CLIENT"].invoke_agent(
-            inputText=input_text,
-            agentId=self.agent_id,
-            agentAliasId=self.agent_alias_id,
-            sessionId=st.session_state["SESSION_ID"],
-            enableTrace=True,
-        )
+        files_generated = []
 
         try:
-            for event in response["completion"]:
-                
-                if 'files' in event.keys():
-                    files_event = event['files']
-                    display(Markdown("### Files"))
-                    files_list = files_event['files']
-                    for this_file in files_list:
-                        print(f"{this_file['name']} ({this_file['type']})")
-                        file_bytes = this_file['bytes']
+            response = st.session_state["BEDROCK_RUNTIME_CLIENT"].invoke_agent(
+                inputText=input_text,
+                agentId=self.agent_id,
+                agentAliasId=self.agent_alias_id,
+                sessionId=st.session_state["SESSION_ID"],
+                enableTrace=True
+            )
 
-                        # save bytes to file, given the name of file and the bytes 
-                        file_name = os.path.join('output', this_file['name'])
-                        with open(file_name, 'wb') as f:
-                            f.write(file_bytes)
-                        if this_file['type'] == 'image/png' or this_file['type'] == 'image/jpeg':
-                            img = mpimg.imread(file_name)
-                            plt.imshow(img)
-                            plt.show()
+            for event in response["completion"]:
+                if 'files' in event.keys():
+                    files_generated.extend(self.process_files(event['files']))
 
                 if "chunk" in event:
-
                     data = event["chunk"]["bytes"]
                     response_text = data.decode("utf8")
 
                 elif "trace" in event:
-                   
                     trace_obj = event["trace"]["trace"]
-
-
+                    
                     if "orchestrationTrace" in trace_obj:
-
-                        trace_dump = json.dumps(
-                            trace_obj["orchestrationTrace"], indent=2
-                        )
+                        trace_dump = json.dumps(trace_obj["orchestrationTrace"], indent=2)
 
                         if "rationale" in trace_obj["orchestrationTrace"]:
-
                             step += 1
                             trace_text += f'\n\n\n---------- Step {step} ----------\n\n\n{trace_obj["orchestrationTrace"]["rationale"]["text"]}\n\n\n'
-                            trace.markdown(
-                                f'\n\n\n---------- Step {step} ----------\n\n\n{trace_obj["orchestrationTrace"]["rationale"]["text"]}\n\n\n'
-                            )
+                            trace.markdown(f'\n\n\n---------- Step {step} ----------\n\n\n{trace_obj["orchestrationTrace"]["rationale"]["text"]}\n\n\n')
 
-                        elif (
-                            "modelInvocationInput"
-                            not in trace_obj["orchestrationTrace"]
-                        ):
-
+                        elif "modelInvocationInput" not in trace_obj["orchestrationTrace"]:
                             trace_text += "\n\n\n" + trace_dump + "\n\n\n"
                             trace.markdown("\n\n\n" + trace_dump + "\n\n\n")
 
                     elif "failureTrace" in trace_obj:
-
-                        trace_text += "\n\n\n" + trace_dump + "\n\n\n"
-                        trace.markdown("\n\n\n" + trace_dump + "\n\n\n")
+                        trace_text += "\n\n\n" + json.dumps(trace_obj["failureTrace"], indent=2) + "\n\n\n"
+                        trace.markdown("\n\n\n" + json.dumps(trace_obj["failureTrace"], indent=2) + "\n\n\n")
 
                     elif "postProcessingTrace" in trace_obj:
-
                         step += 1
                         trace_text += f"\n\n\n---------- Step {step} ----------\n\n\n{json.dumps(trace_obj['postProcessingTrace']['modelInvocationOutput']['parsedResponse']['text'], indent=2)}\n\n\n"
-                        trace.markdown(
-                            f"\n\n\n---------- Step {step} ----------\n\n\n{json.dumps(trace_obj['postProcessingTrace']['modelInvocationOutput']['parsedResponse']['text'], indent=2)}\n\n\n"
-                        )
+                        trace.markdown(f"\n\n\n---------- Step {step} ----------\n\n\n{json.dumps(trace_obj['postProcessingTrace']['modelInvocationOutput']['parsedResponse']['text'], indent=2)}\n\n\n")
 
         except Exception as e:
-            trace_text += str(e)
-            trace.markdown(str(e))
-            raise Exception("unexpected event.", e)
+            trace_text += f"Error during agent invocation: {str(e)}\n"
+            trace.markdown(f"Error during agent invocation: {str(e)}")
 
-        return response_text, trace_text
+        return response_text, trace_text, files_generated
+        
+    def list_png_files(self):
+        try:
+            self.s3_client = (
+                Session()
+                .client("s3"))
+            prefix = 'nsclc_radiogenomics/PNG/'
+            response = self.s3_client.list_objects_v2(Bucket=self.s3_bucket_name, Prefix=prefix)
+            return [obj['Key'] for obj in response.get('Contents', []) if obj['Key'].lower().endswith('.png')]
+        except Exception as e:
+            st.error(f"Error listing image: {str(e)}")
+            return None
+
+    def get_image_from_s3(self, file_key):
+        try:
+            self.s3_client = (
+                Session()
+                .client("s3"))
+            response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=file_key)
+            image_content = response['Body'].read()
+            image = Image.open(BytesIO(image_content))
+            return image
+        except Exception as e:
+            st.error(f"Error fetching image from S3: {str(e)}")
+            return None
+    
+
+    def process_files(self, files_event):
+        files_list = files_event['files']
+        processed_files = []
+        for file in files_list:
+            file_name = file['name']
+            file_type = file['type']
+            file_bytes = file['bytes']
+
+            # Save the file
+            file_path = os.path.join(self.temp_dir, file_name)
+            with open(file_path, 'wb') as f:
+                f.write(file_bytes)
+
+            processed_files.append({
+                'name': file_name,
+                'type': file_type,
+                'path': file_path
+            })
+
+        return processed_files
+
+    def cleanup_temp_files(self):
+        shutil.rmtree(self.temp_dir)
+        self.temp_dir = tempfile.mkdtemp()
+    
+    def get_s3_image(self, invocation_id):
+        try:
+            
+            self.s3_client = (
+            Session()
+            .client("s3"))
+            s3_key = f'graphs/invocationID/{invocation_id}/KMplot.png'
+            
+            
+            response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=s3_key)
+            image_content = response['Body'].read()
+
+            # Save the image to a temporary file
+            temp_image_path = os.path.join(self.temp_dir, 'KMplot.png')
+            with open(temp_image_path, 'wb') as f:
+                f.write(image_content)
+
+            return {
+                'name': 'KMplot.png',
+                'type': 'image/png',
+                'path': temp_image_path
+            }
+        except Exception as e:
+            st.error(f"Error fetching image from S3: {str(e)}")
+            return None
