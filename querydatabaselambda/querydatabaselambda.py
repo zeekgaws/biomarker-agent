@@ -42,7 +42,7 @@ def refineSQL(sql, question):
     client = boto3.client('bedrock-runtime')
     user_message = {"role": "user", "content": prompt}
     claude_response = {"role": "assistant", "content": "<efficientQuery>"}
-    model_Id = 'anthropic.claude-3-sonnet-20240229-v1:0'
+    model_Id = 'anthropic.claude-3-5-sonnet-20240620-v1:0'
     messages = [user_message, claude_response]
     system_prompt = "You are an extremely critical sql query evaluation assistant, your job is to look at the schema, sql query and question being asked to then evaluate the query to ensure it is efficient."
     max_tokens = 1000
@@ -209,14 +209,14 @@ def lambda_handler(event, context):
         'responseBody': response_body
     }
 
-    session_attributes = event['sessionAttributes']
-    prompt_session_attributes = event['promptSessionAttributes']
+    # session_attributes = event['sessionAttributes']
+    # prompt_session_attributes = event['promptSessionAttributes']
     
     api_response = {
         'messageVersion': '1.0', 
         'response': action_response,
-        'sessionAttributes': session_attributes,
-        'promptSessionAttributes': prompt_session_attributes
+        # 'sessionAttributes': session_attributes,
+        # 'promptSessionAttributes': prompt_session_attributes
     }
         
     return api_response
