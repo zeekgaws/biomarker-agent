@@ -117,7 +117,8 @@ Resources:
                       s3 = boto3.resource('s3')
                       bucket = s3.Bucket(event['ResourceProperties']['S3BucketName'])
                       bucket.objects.all().delete()
-                      
+                      logbucket = s3.Bucket(event['ResourceProperties']['LogBucketName'])
+                      logbucket.objects.all().delete()
                       cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
                   except Exception as e:
                       print(e)
@@ -149,6 +150,8 @@ Resources:
                 Resource: 
                   - !Sub 'arn:aws:s3:::${S3Bucket}'
                   - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+                  - !Sub 'arn:aws:s3:::${LogBucket}'
+                  - !Sub 'arn:aws:s3:::${LogBucket}/*'
               - Effect: Allow
                 Action:
                   - 'ecr:ListImages'
@@ -174,6 +177,7 @@ Resources:
       ServiceToken: !GetAtt CleanupLambdaFunction.Arn
       ECRRepositoryName: !Ref ECRRepository
       S3BucketName: !Ref S3Bucket
+      LogBucketName: !Ref LogBucket
   
   
   S3Bucket: 
@@ -283,13 +287,13 @@ Resources:
                 - echo "Moving zip file to project root..."
                 - mv ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
                 - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
-                - cd repo/ActionGroups/querydatabaselambda
+                - cd ActionGroups/querydatabaselambda
                 - echo "Creating list of items to zip..."
                 - items_to_zip=$(ls -A | tr '\n' ' ')
                 - zip -r querydatabaselambda.zip $items_to_zip
                 - cd ../..
                 - echo "Moving zip file to project root..."
-                - mv repo/ActionGroups/querydatabaselambda/querydatabaselambda.zip .
+                - mv ActionGroups/querydatabaselambda/querydatabaselambda.zip .
                 - aws s3 cp querydatabaselambda.zip s3://${S3Bucket}/querydatabaselambda.zip
                 - echo "Build phase completed"
       TimeoutInMinutes: 10
