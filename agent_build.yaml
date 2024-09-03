@@ -295,7 +295,7 @@ Resources:
       TimeoutInMinutes: 10
 
 
-  # Log into ECR and push Docker image
+  # Log into ECR and push scientific-plots-with-lifelines Docker image
   DockerPushLogic:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -335,19 +335,6 @@ Resources:
                 - echo "Tagging Docker image..."
                 - docker tag lifelines-python3.12-v2:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ImageTag}
                 - echo "Docker image tagged"
-                - cd ../..
-                - echo "Zipping Lambda function..."
-                - cd repo/ActionGroups/pubmed-lambda-function
-                - echo "Creating list of items to zip..."
-                - items_to_zip=$(ls -A | tr '\n' ' ')
-                - echo "Creating zip pubmed lambda file..."
-                - zip -r pubmed-lambda-function.zip $items_to_zip
-                - echo "Lambda function zipped"
-                - cd ../..
-                - echo "Moving zip file to project root..."
-                - mv repo/ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
-                - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
-                - echo "Build phase completed"
             post_build:
               commands:
                 - echo "Starting post_build phase"
