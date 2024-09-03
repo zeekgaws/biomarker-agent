@@ -281,7 +281,7 @@ Resources:
                 - echo "Lambda function zipped"
                 - cd ../..
                 - echo "Moving zip file to project root..."
-                - mv repo/ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
+                - mv ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
                 - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
                 - cd repo/ActionGroups/querydatabaselambda
                 - echo "Creating list of items to zip..."
