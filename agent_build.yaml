@@ -210,7 +210,21 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-log-bucket'
-      AccessControl: LogDeliveryWrite
+  
+  LogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action:
+              - s3:PutObject
+            Resource: !Sub '${LogBucket.Arn}/*'
 
   # Create CloudWatch Log Group
   CodeBuildLogGroup:
