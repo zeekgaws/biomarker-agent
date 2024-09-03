@@ -124,7 +124,7 @@ Resources:
                       cfnresponse.send(event, context, cfnresponse.FAILED, {})
               else:
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-      Runtime: python3.8
+      Runtime: python3.12
       Timeout: 300
 
   CleanupLambdaRole:
@@ -146,13 +146,24 @@ Resources:
                 Action:
                   - 's3:ListBucket'
                   - 's3:DeleteObject'
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              - Effect: Allow
+                Action:
                   - 'ecr:ListImages'
                   - 'ecr:BatchDeleteImage'
                   - 'ecr:DeleteRepository'
                   - 'ecr:DescribeRepositories'
-                Resource: '*'
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+                Resource: 
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepositoryName}'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/medical-image-processing-smstudio'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${CleanupLambdaFunction}:*'
 
   CleanupCustomResource:
     Type: Custom::Cleanup
@@ -164,14 +175,42 @@ Resources:
       ECRRepositoryName: !Ref ECRRepository
       S3BucketName: !Ref S3Bucket
   
+  
   S3Bucket: 
+     Type: AWS::S3::Bucket
+     Properties:
+       BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-agent-build-bucket'
+       BucketEncryption:
+         ServerSideEncryptionConfiguration:
+           - ServerSideEncryptionByDefault:
+               SSEAlgorithm: AES256
+       LoggingConfiguration:
+         DestinationBucketName: !Ref LogBucket
+         LogFilePrefix: 'access-logs/'
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ForceSSLOnlyAccess
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: 
+              - !Sub '${S3Bucket.Arn}'
+              - !Sub '${S3Bucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  LogBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-agent-build-bucket'
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+      BucketName: !Sub '${EnvironmentName}-${AWS::AccountId}-log-bucket'
+      AccessControl: LogDeliveryWrite
 
   # Create CloudWatch Log Group
   CodeBuildLogGroup:
@@ -218,9 +257,9 @@ Resources:
                 - aws s3 cp ncbi_article.pdf s3://${S3Bucket}/ncbi_article.pdf
                 - echo "NCBI article uploaded to S3"
                 - echo "Cloning Git repository..."
-                - git clone ${GitRepoURL}
+                - git clone ${GitRepoURL} repo
                 - echo "Zipping Lambda function..."
-                - cd biomarker-agent/pubmed-lambda-function
+                - cd repo/ActionGroups/pubmed-lambda-function
                 - echo "Creating list of items to zip..."
                 - items_to_zip=$(ls -A | tr '\n' ' ')
                 - echo "Creating zip pubmed lambda file..."
@@ -228,15 +267,15 @@ Resources:
                 - echo "Lambda function zipped"
                 - cd ../..
                 - echo "Moving zip file to project root..."
-                - mv biomarker-agent/pubmed-lambda-function/pubmed-lambda-function.zip .
+                - mv repo/ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
                 - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
-                - cd biomarker-agent/querydatabaselambda
+                - cd repo/ActionGroups/querydatabaselambda
                 - echo "Creating list of items to zip..."
                 - items_to_zip=$(ls -A | tr '\n' ' ')
                 - zip -r querydatabaselambda.zip $items_to_zip
                 - cd ../..
                 - echo "Moving zip file to project root..."
-                - mv biomarker-agent/querydatabaselambda/querydatabaselambda.zip .
+                - mv repo/ActionGroups/querydatabaselambda/querydatabaselambda.zip .
                 - aws s3 cp querydatabaselambda.zip s3://${S3Bucket}/querydatabaselambda.zip
                 - echo "Build phase completed"
       TimeoutInMinutes: 10
@@ -275,8 +314,8 @@ Resources:
               commands:
                 - echo "Starting build phase"
                 - echo "Cloning Git repository..."
-                - git clone ${GitRepoURL}
-                - cd biomarker-agent/scientific-plots-with-lifelines
+                - git clone ${GitRepoURL} repo
+                - cd repo/ActionGroups/scientific-plots-with-lifelines
                 - echo "Building Docker image..."
                 - docker build -t lifelines-python3.12-v2 .
                 - echo "Tagging Docker image..."
@@ -284,7 +323,7 @@ Resources:
                 - echo "Docker image tagged"
                 - cd ../..
                 - echo "Zipping Lambda function..."
-                - cd biomarker-agent/pubmed-lambda-function
+                - cd repo/ActionGroups/pubmed-lambda-function
                 - echo "Creating list of items to zip..."
                 - items_to_zip=$(ls -A | tr '\n' ' ')
                 - echo "Creating zip pubmed lambda file..."
@@ -292,7 +331,7 @@ Resources:
                 - echo "Lambda function zipped"
                 - cd ../..
                 - echo "Moving zip file to project root..."
-                - mv biomarker-agent/pubmed-lambda-function/pubmed-lambda-function.zip .
+                - mv repo/ActionGroups/pubmed-lambda-function/pubmed-lambda-function.zip .
                 - aws s3 cp pubmed-lambda-function.zip s3://${S3Bucket}/pubmed-lambda-function.zip
                 - echo "Build phase completed"
             post_build:
@@ -334,8 +373,8 @@ Resources:
                 - echo Logging in to Amazon ECR...
                 - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
                 - echo Cloning the repository...
-                - git clone ${GitRepoURL}
-                - cd biomarker-agent/imaging-biomarker 
+                - git clone ${GitRepoURL} repo
+                - cd repo/ActionGroups/imaging-biomarker 
                 - echo Checking for required files...
                 - ls -la
                 - if [ ! -f requirements.txt ] || [ ! -f dcm2nifti_processing.py ] || [ ! -f radiomics_utils.py ]; then echo "Missing required files"; exit 1; fi
@@ -408,7 +447,7 @@ Resources:
                             "InputName": "DICOM",
                             "AppManaged": false,
                             "S3Input": {
-                              "S3Uri.$": "States.Format('${S3Bucket}/nsclc_radiogenomics/input/{}' , $)",
+                              "S3Uri.$": "States.Format('s3://sagemaker-solutions-prod-us-east-1/sagemaker-lung-cancer-survival-prediction/1.1.0/data/nsclc_radiogenomics/{}' , $)", 
                               "LocalPath": "/opt/ml/processing/input",
                               "S3DataType": "S3Prefix",
                               "S3InputMode": "File",
@@ -1131,7 +1170,7 @@ Resources:
                   - bedrock:Retrieve
                 Resource: 
                   - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
-                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${BedrockKnowledgeBase}
       
   ########################
   ##### ActionGroup #####
@@ -1158,7 +1197,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: 2012-10-17
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -1166,31 +1205,46 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/AmazonRedshiftDataFullAccess
-        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       Policies:
-        - PolicyName: RedshiftAccess
+        - PolicyName: AgentLambdaPolicy
           PolicyDocument:
-            Version: 2012-10-17
+            Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: LambdaExecution
+                Effect: Allow
                 Action:
-                  - redshift:*
-                Resource:
-                  - !Sub arn:aws:redshift:${AWS::Region}:${AWS::AccountId}:*
-        - PolicyName: S3Access
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Sid: RedshiftDataAccess
+                Effect: Allow
+                Action:
+                  - redshift-data:ExecuteStatement
+                  - redshift-data:DescribeStatement
+                  - redshift-data:GetStatementResult
+                  - redshift-data:ListStatements
+                Resource: '*'
+              - Sid: RedshiftCredentials
+                Effect: Allow
+                Action:
+                  - redshift:GetClusterCredentials
+                Resource: 
+                  - !Sub arn:aws:redshift:${AWS::Region}:${AWS::AccountId}:dbuser:biomarker-redshift-cluster/admin
+                  - !Sub arn:aws:redshift:${AWS::Region}:${AWS::AccountId}:dbname:biomarker-redshift-cluster/dev
+              - Sid: S3Access
+                Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: 
                   - !Sub arn:aws:s3:::${S3Bucket}/*
-                  
+              - Sid: BedrockAccess
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
+                    
                   
   AgentLambdaPermission:
     Type: AWS::Lambda::Permission
@@ -1541,7 +1595,7 @@ Resources:
                   - bedrock:CreateAgentAlias
                   - bedrock:DeleteAgentAlias
                   - bedrock:GetAgent
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/${AgentResource}
         - PolicyName: BedrockAgentAliasPolicy
           PolicyDocument:
             Version: '2012-10-17'
@@ -1585,7 +1639,9 @@ Resources:
           - Effect: Allow
             Action:
             - bedrock:InvokeModel
-            Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/*'
+            Resource: 
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v1'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0'
             Sid: BedrockInvokeModelStatement
       - PolicyName: OSSPolicy
         PolicyDocument:
@@ -1594,7 +1650,7 @@ Resources:
           - Effect: Allow
             Action:
             - aoss:APIAccessAll
-            Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+            Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/${Collection}'
             Sid: OpenSearchServerlessAPIAccessAllStatement
       - PolicyName: S3Policy
         PolicyDocument:
@@ -1603,7 +1659,7 @@ Resources:
           - Effect: Allow
             Action:
             - s3:ListBucket
-            Resource: 'arn:aws:s3:::*'
+            Resource: !Sub 'arn:aws:s3:::${S3Bucket}'
             Sid: S3ListBucketStatement
           - Effect: Allow
             Action:
