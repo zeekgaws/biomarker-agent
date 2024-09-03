@@ -1248,7 +1248,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0
                     
                   
   AgentLambdaPermission:
