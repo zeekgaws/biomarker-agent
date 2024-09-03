@@ -147,8 +147,8 @@ Resources:
                   - 's3:ListBucket'
                   - 's3:DeleteObject'
                 Resource: 
-                  - !Sub 'arn:aws:s3:::${S3BucketName}'
-                  - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/*'
               - Effect: Allow
                 Action:
                   - 'ecr:ListImages'
@@ -156,7 +156,7 @@ Resources:
                   - 'ecr:DeleteRepository'
                   - 'ecr:DescribeRepositories'
                 Resource: 
-                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepositoryName}'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepository}'
                   - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/medical-image-processing-smstudio'
               - Effect: Allow
                 Action:
