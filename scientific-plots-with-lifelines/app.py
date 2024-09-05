@@ -25,7 +25,7 @@ def fit_survival_regression_model(data):
     df = pd.DataFrame(rows)
 
     # Convert 'Alive' and 'Dead' to 0 and 1, and ensure it's numeric
-    df[0] = df[0].map({'False': 0, 'True': 1})
+    df[0] = df[0].map({False: 0, True: 1})
     
     df_numeric = df.select_dtypes(include='number')
     
