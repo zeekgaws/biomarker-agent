@@ -27,11 +27,16 @@ def fit_survival_regression_model(data):
     # Convert 'Alive' and 'Dead' to 0 and 1, and ensure it's numeric
     df[0] = df[0].map({'False': 0, 'True': 1})
     
+    df_numeric = df.select_dtypes(include='number')
     
-    print(df)
+    df_numeric.columns = range(len(df_numeric.columns))
+
+    
+    
+    print(df_numeric)
     cph = CoxPHFitter()
     
-    cph.fit(df, duration_col=1, event_col=0)
+    cph.fit(df_numeric, duration_col=1, event_col=0)
     summary = cph.summary
     return summary
     
