@@ -452,7 +452,7 @@ Resources:
                             "InputName": "DICOM",
                             "AppManaged": false,
                             "S3Input": {
-                              "S3Uri.$": "States.Format('s3://sagemaker-solutions-prod-us-east-1/sagemaker-lung-cancer-survival-prediction/1.1.0/data/nsclc_radiogenomics/{}' , $)", 
+                              "S3Uri.$": "States.Format('s3://sagemaker-solutions-prod-${AWS::Region}/sagemaker-lung-cancer-survival-prediction/1.1.0/data/nsclc_radiogenomics/{}' , $)", 
                               "LocalPath": "/opt/ml/processing/input",
                               "S3DataType": "S3Prefix",
                               "S3InputMode": "File",
@@ -675,6 +675,8 @@ Resources:
                 Resource: 
                   - !Sub 'arn:aws:s3:::${S3Bucket}'
                   - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+                  - !Sub 'arn:aws:s3:::sagemaker-solutions-prod-${AWS::Region}/sagemaker-lung-cancer-survival-prediction/*'
+
 
   TriggerBuildLambda:
     Type: AWS::Lambda::Function
