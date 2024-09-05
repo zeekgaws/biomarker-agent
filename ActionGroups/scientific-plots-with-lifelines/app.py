@@ -11,6 +11,8 @@ import pandas as pd
 from lifelines import CoxPHFitter
   
 
+
+
 def fit_survival_regression_model(data):
     """ Fit Cox survival regression model to data and return a data frame """
     records = data['Records']
@@ -22,12 +24,20 @@ def fit_survival_regression_model(data):
     # Create the DataFrame
     df = pd.DataFrame(rows)
 
-    # Print the DataFrame
-    # df[0] = df[0].map({'Alive': 0, 'Dead': 1})
-    print(df)
+    # Convert 'Alive' and 'Dead' to 0 and 1, and ensure it's numeric
+    df[0] = df[0].map({False: 0, True: 1})
+    print("lastest version")
+    
+    df_numeric = df.select_dtypes(include='number')
+    
+    df_numeric.columns = range(len(df_numeric.columns))
+
+    
+    
+    print(df_numeric)
     cph = CoxPHFitter()
     
-    cph.fit(df, duration_col=1, event_col=0)
+    cph.fit(df_numeric, duration_col=1, event_col=0)
     summary = cph.summary
     return summary
     
@@ -118,7 +128,7 @@ def save_plot(fig,s3_bucket):
     return
 
 def lambda_handler(event, context):
-    # agent = event['agent']
+    agent = event['agent']
     actionGroup = event['actionGroup']
     function = event['function']
     parameters = event.get('parameters', [])
