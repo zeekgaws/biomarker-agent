@@ -11,6 +11,8 @@ import pandas as pd
 from lifelines import CoxPHFitter
   
 
+
+
 def fit_survival_regression_model(data):
     """ Fit Cox survival regression model to data and return a data frame """
     records = data['Records']
@@ -22,8 +24,19 @@ def fit_survival_regression_model(data):
     # Create the DataFrame
     df = pd.DataFrame(rows)
 
-    # Print the DataFrame
-    df[0] = df[0].map({'Alive': 0, 'Dead': 1})
+    # Convert 'Alive' and 'Dead' to 0 and 1, and ensure it's numeric
+    df[0] = df[0].map({'Alive': 0, 'Dead': 1}).astype(int)
+    
+    # Convert duration column to numeric, replacing any non-numeric values with NaN
+    df[1] = pd.to_numeric(df[1], errors='coerce')
+    
+    # Convert all other columns to numeric
+    for col in df.columns[2:]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Remove any rows with NaN values
+    df = df.dropna()
+    
     print(df)
     cph = CoxPHFitter()
     
