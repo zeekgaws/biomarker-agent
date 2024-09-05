@@ -163,12 +163,24 @@ def lambda_handler(event, context):
             result = extract_table_columns(raw_schema)
 
         elif event['apiPath'] == "/refinesql":
-            question = event['requestBody']['content']['application/json']['properties'][0]['value']
-            sql = event['requestBody']['content']['application/json']['properties'][1]['value']
+            params =event['parameters']
+            for param in params:
+                if param.get("name") == "sql":
+                    sql = param.get("value")
+                    print(sql)
+                if param.get("name") == "question":
+                    question = param.get("value")
+                    print(question)
+                
             result = refineSQL(sql, question)
         
         elif event['apiPath'] == "/queryredshift":
-            query = event['requestBody']['content']['application/json']['properties'][0]['value']
+            params =event['parameters']
+            for param in params:
+                if param.get("name") == "query":
+                    query = param.get("value")
+                    print(query)
+                
             result = query_redshift(query)
 
         else:
