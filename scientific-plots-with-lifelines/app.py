@@ -1,213 +1,200 @@
+
 import json
-import boto3
-import ast
-import os
-from botocore.exceptions import ClientError
-from lifelines import CoxPHFitter
-from lifelines.exceptions import ConvergenceError
-import pandas as pd
+from lifelines import KaplanMeierFitter,CoxPHFitter
 import plotly.graph_objects as go
+import ast
 import io
+import kaleido
+import boto3
+import os
+import pandas as pd
+from lifelines import CoxPHFitter
+  
+
+def fit_survival_regression_model(data):
+    """ Fit Cox survival regression model to data and return a data frame """
+    records = data['Records']
+    # Convert the data to a list of lists
+    rows = []
+    for row in records:
+        rows.append([value.get(list(value.keys())[0]) for value in row])
+
+    # Create the DataFrame
+    df = pd.DataFrame(rows)
+
+    # Print the DataFrame
+    df[0] = df[0].map({'Alive': 0, 'Dead': 1})
+    print(df)
+    cph = CoxPHFitter()
+    
+    cph.fit(df, duration_col=1, event_col=0)
+    summary = cph.summary
+    return summary
+    
+
+def fit_km(name, durations, event_observed):
+    """ Fit Kaplan-Meier model to data and return a data frame """
+    kmf = KaplanMeierFitter()
+    kmf.fit(durations=durations, event_observed=event_observed, label=name)
+    df = kmf.survival_function_.copy(deep=True)
+    lo95 = f"{name}_lower_0.95"
+    hi95 = f"{name}_upper_0.95"
+    df[lo95] = kmf.confidence_interval_[lo95]
+    df[hi95] = kmf.confidence_interval_[hi95]
+    df.reset_index(inplace=True)
+    print(df)
+    return df
+
+
+def plotly_km(df, name, line_color, fill_color, fig=None):
+    """ Create a plotly figure for Kaplan-Meier, for a single KM model """
+    if fig is None:
+        fig = go.Figure()
+    lo95 = f"{name}_lower_0.95"
+    hi95 = f"{name}_upper_0.95"
+    fig.add_traces([go.Scatter(x=df['timeline']
+                            , y=df[name]
+                            , line_color = line_color
+                            , line_shape='hv'
+                            , name = name
+                            , showlegend=False)
+                , go.Scatter(x = df['timeline']
+                            , y = df[hi95]
+                            , mode = 'lines'
+                            , line_color = 'rgba(0,0,0,0)'
+                            , showlegend = False
+                            , line_shape='hv')
+                    , go.Scatter(x = df['timeline']
+                            , y = df[lo95]
+                            , mode = 'lines'
+                            , line_color = 'rgba(0,0,0,0)'
+                            , name = f"95% CI {name}"
+                            , fill='tonexty'
+                            , fillcolor = fill_color
+                            , line_shape='hv'
+                            )
+                    ])
+    print('plot figure')
+    return fig
+
+
+def plot_kaplan_meier(biomarker_name:str
+                      , baseline:str, duration_baseline:list, event_baseline:list
+                      , condition:str, duration_condition:list, event_condition:list):
+    """ Plot Kaplan-Meier comparing condition vs baseline """
+    print("\nduration_baseline:")
+    print(type(duration_baseline))
+    print(duration_baseline)
+    print("\nevent_baseline:")
+    print(event_baseline)
+    df_baseline = fit_km(baseline, duration_baseline, event_baseline)
+    #print("\df_baseline:" + str(df_baseline))
+    #print("\duration_condition:" + str(duration_condition))
+    #print("\event_condition:" + str(event_condition))
+    df_condition = fit_km(condition, duration_condition, event_condition)
+    #print("\df_condition:" + str(df_condition))
+    fig = plotly_km(df_baseline, baseline, line_color='rgba(0,0,255,1)', fill_color='rgba(0, 0, 255, 0.2)', fig=None)
+    fig = plotly_km(df_condition, condition, line_color='rgba(255,140,0,1)', fill_color='rgba(255, 140, 0, 0.2)', fig=fig)
+    fig.update_layout(title_text=f"{biomarker_name}\n"
+                      , legend=dict(
+                          yanchor="top"
+                          , y=0.99
+                          , xanchor="left"
+                          , x=0.9
+                          )
+                      )
+    
+    return fig
+    
+def save_plot(fig,s3_bucket):
+    img_data = io.BytesIO()
+    fig.write_image(img_data, format='png')
+    img_data.seek(0)
+    s3 = boto3.resource('s3')
+    bucket = s3.Bucket(s3_bucket)
+    invocationID = 1
+    KEY = 'graphs/invocationID/' + str(invocationID) + '/KMplot.png' 
+    bucket.put_object(Body=img_data, ContentType='image/png', Key=KEY)
+    return
 
 def lambda_handler(event, context):
-    try:
-        actionGroup = event['actionGroup']
-        function = event['function']
-        parameters = event.get('parameters', [])
-
-        if function == "plot_kaplan_meier":
-            responseBody = handle_plot_kaplan_meier(parameters)
-        elif function == "fit_survival_regression":
-            responseBody = handle_fit_survival_regression(parameters)
-        else:
-            responseBody = {
-                "TEXT": {
-                    "body": f"Unknown function: {function}"
-                }
-            }
-
-        action_response = {
-            'actionGroup': actionGroup,
-            'function': function,
-            'functionResponse': {
-                'responseBody': responseBody
-            }
-        }
-
-        return {'response': action_response, 'messageVersion': event['messageVersion']}
-
-    except Exception as e:
-        error_response = {
-            'actionGroup': event.get('actionGroup', 'Unknown'),
-            'function': event.get('function', 'Unknown'),
-            'functionResponse': {
-                'responseBody': {
-                    "TEXT": {
-                        "body": f"Unhandled error in lambda_handler: {str(e)}"
-                    }
-                }
-            }
-        }
-        return {'response': error_response, 'messageVersion': event.get('messageVersion', 'Unknown')}
-
-def handle_plot_kaplan_meier(parameters):
-    try:
-        biomarker_name, hazard_ratio, p_value, baseline, duration_baseline, event_baseline, condition, duration_condition, event_condition = extract_kaplan_meier_params(parameters)
-        
-        s3_bucket = os.environ['S3_BUCKET']
-        
+    agent = event['agent']
+    actionGroup = event['actionGroup']
+    function = event['function']
+    parameters = event.get('parameters', [])
+    if function == "plot_kaplan_meier":
+    
+        for param in parameters:
+            if param["name"] == "biomarker_name":
+                biomarker_name = param["value"]
+            if param["name"] == "hazard_ratio":
+                hazard_ratio = param["value"]
+            if param["name"] == "p_value":
+                p_value = param["value"]
+            if param["name"] == "baseline":
+                baseline = param["value"]
+            if param["name"] == "duration_baseline":
+                duration_baseline = param["value"]
+            if param["name"] == "event_baseline":
+                event_baseline = param["value"]
+            if param["name"] == "condition":
+                condition = param["value"]
+            if param["name"] == "duration_condition":
+                duration_condition = param["value"]
+            if param["name"] == "event_condition":
+                event_condition = param["value"]
+            ##Following environment variable should be set with your lambda function
+            print(os.environ['S3_BUCKET'])
+            s3_bucket = os.environ['S3_BUCKET']
+            
+        print(type(duration_baseline))
+        print(duration_baseline)
         duration_baseline = ast.literal_eval(duration_baseline)
         event_baseline = ast.literal_eval(event_baseline)
         duration_condition = ast.literal_eval(duration_condition)
         event_condition = ast.literal_eval(event_condition)
-        
+        print(type(duration_baseline))
         baseline = '<=10' 
         condition = '>10'
-        
-        fig = plot_kaplan_meier(biomarker_name, baseline, duration_baseline, event_baseline, condition, duration_condition, event_condition)
-        save_plot(fig, s3_bucket)
-        
-        return {
+        # Execute your business logic here. For more information, refer to: https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
+        fig = plot_kaplan_meier(biomarker_name,baseline, duration_baseline,event_baseline,condition,duration_condition,event_condition)
+        save_plot(fig,s3_bucket)
+        responseBody =  {
             "TEXT": {
-                "body": "The plot_kaplan_meier function was called successfully!"
+                "body": "The function {} was called successfully!".format(function)
             }
         }
-    except ValueError as e:
-        return {
-            "TEXT": {
-                "body": f"Error in plot_kaplan_meier: Invalid input data. {str(e)}"
-            }
-        }
-    except Exception as e:
-        return {
-            "TEXT": {
-                "body": f"Error in plot_kaplan_meier: {str(e)}"
-            }
-        }
-
-def handle_fit_survival_regression(parameters):
-    try:
-        bucket, key = extract_s3_params(parameters)
+    
+    if function == "fit_survival_regression":
+        bucket = ''
+        key = ''
         s3 = boto3.client('s3')
-        
+        for param in parameters:
+            if param["name"] == "bucket":
+                bucket = param["value"]
+                print(bucket)
+            if param["name"] == "key":
+                key = param["value"]
+                print(key)
         obj = s3.get_object(Bucket=bucket, Key=key)
         data = json.loads(obj['Body'].read().decode('utf-8'))
         summary = fit_survival_regression_model(data)
-        
-        return {
+        responseBody =  {
             "TEXT": {
-                "body": f"The fit_survival_regression function was called successfully! Response summary: {summary}"
-            }
-        }
-    except ClientError as e:
-        return {
-            "TEXT": {
-                "body": f"Error accessing S3: {str(e)}"
-            }
-        }
-    except ConvergenceError as e:
-        return {
-            "TEXT": {
-                "body": f"Convergence error in survival regression model: {str(e)}. Please check your data for high collinearity or other issues."
-            }
-        }
-    except ValueError as e:
-        return {
-            "TEXT": {
-                "body": f"Invalid input data for survival regression model: {str(e)}"
-            }
-        }
-    except Exception as e:
-        return {
-            "TEXT": {
-                "body": f"Unexpected error in fit_survival_regression: {str(e)}"
+                "body": "The function {} was called successfully! with a response summary as {}".format(function,summary)
             }
         }
 
-def fit_survival_regression_model(data):
-    try:
-        records = data['Records']
-        rows = []
-        for row in records:
-            rows.append([value.get(list(value.keys())[0]) for value in row])
+    action_response = {
+        'actionGroup': actionGroup,
+        'function': function,
+        'functionResponse': {
+            'responseBody': responseBody
+        }
 
-        df = pd.DataFrame(rows)
-        print(df)  # Keep this for debugging
+    }
 
-        if df.empty:
-            raise ValueError("The input DataFrame is empty.")
+    dummy_function_response = {'response': action_response, 'messageVersion': event['messageVersion']}
+    print("Response: {}".format(dummy_function_response))
 
-        if df.shape[1] < 2:
-            raise ValueError("The DataFrame must have at least two columns for duration and event.")
-
-        cph = CoxPHFitter()
-        cph.fit(df, duration_col=1, event_col=0)
-        summary = cph.summary
-        return summary
-    except ConvergenceError as e:
-        print(f"Convergence Error: {str(e)}")
-        raise
-    except ValueError as e:
-        print(f"Value Error in fit_survival_regression_model: {str(e)}")
-        raise
-    except Exception as e:
-        print(f"Unexpected error in fit_survival_regression_model: {str(e)}")
-        raise
-
-def plot_kaplan_meier(biomarker_name, baseline, duration_baseline, event_baseline, condition, duration_condition, event_condition):
-    try:
-        from lifelines import KaplanMeierFitter
-
-        kmf_baseline = KaplanMeierFitter()
-        kmf_baseline.fit(duration_baseline, event_baseline, label=baseline)
-
-        kmf_condition = KaplanMeierFitter()
-        kmf_condition.fit(duration_condition, event_condition, label=condition)
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=kmf_baseline.timeline, y=kmf_baseline.survival_function_.values.flatten(),
-                                 mode='lines', name=baseline))
-        fig.add_trace(go.Scatter(x=kmf_condition.timeline, y=kmf_condition.survival_function_.values.flatten(),
-                                 mode='lines', name=condition))
-
-        fig.update_layout(title=f'Kaplan-Meier Curve - {biomarker_name}',
-                          xaxis_title='Time',
-                          yaxis_title='Survival Probability')
-        return fig
-    except Exception as e:
-        print(f"Error in plot_kaplan_meier: {str(e)}")
-        raise
-
-def save_plot(fig, s3_bucket):
-    try:
-        img_data = io.BytesIO()
-        fig.write_image(img_data, format='png')
-        img_data.seek(0)
-        s3 = boto3.resource('s3')
-        bucket = s3.Bucket(s3_bucket)
-        invocationID = 1  # You might want to generate this dynamically
-        KEY = f'graphs/invocationID/{invocationID}/KMplot.png'
-        bucket.put_object(Body=img_data, ContentType='image/png', Key=KEY)
-    except Exception as e:
-        print(f"Error in save_plot: {str(e)}")
-        raise
-
-def extract_kaplan_meier_params(parameters):
-    param_dict = {param["name"]: param["value"] for param in parameters}
-    required_params = ["biomarker_name", "hazard_ratio", "p_value", "baseline", "duration_baseline", "event_baseline", "condition", "duration_condition", "event_condition"]
-    
-    for param in required_params:
-        if param not in param_dict:
-            raise ValueError(f"Missing required parameter: {param}")
-
-    return (param_dict["biomarker_name"], param_dict["hazard_ratio"], param_dict["p_value"],
-            param_dict["baseline"], param_dict["duration_baseline"], param_dict["event_baseline"],
-            param_dict["condition"], param_dict["duration_condition"], param_dict["event_condition"])
-
-def extract_s3_params(parameters):
-    param_dict = {param["name"]: param["value"] for param in parameters}
-    if "bucket" not in param_dict or "key" not in param_dict:
-        raise ValueError("Missing required S3 parameters: bucket and/or key")
-    return param_dict["bucket"], param_dict["key"]
-
-# Ensure that all necessary libraries are included in your Lambda deployment package
+    return dummy_function_response
