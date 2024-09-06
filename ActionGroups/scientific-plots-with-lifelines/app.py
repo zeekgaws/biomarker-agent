@@ -35,7 +35,7 @@ def fit_survival_regression_model(data):
     
     
     print(df_numeric)
-    cph = CoxPHFitter()
+    cph = CoxPHFitter(penalizer=0.0001)
     
     cph.fit(df_numeric, duration_col=1, event_col=0)
     summary = cph.summary
