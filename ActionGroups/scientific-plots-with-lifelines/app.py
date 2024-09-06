@@ -132,46 +132,53 @@ def lambda_handler(event, context):
     actionGroup = event['actionGroup']
     function = event['function']
     parameters = event.get('parameters', [])
-    if function == "plot_kaplan_meier":
-    
-        for param in parameters:
-            if param["name"] == "biomarker_name":
-                biomarker_name = param["value"]
-            if param["name"] == "hazard_ratio":
-                hazard_ratio = param["value"]
-            if param["name"] == "p_value":
-                p_value = param["value"]
-            if param["name"] == "baseline":
-                baseline = param["value"]
-            if param["name"] == "duration_baseline":
-                duration_baseline = param["value"]
-            if param["name"] == "event_baseline":
-                event_baseline = param["value"]
-            if param["name"] == "condition":
-                condition = param["value"]
-            if param["name"] == "duration_condition":
-                duration_condition = param["value"]
-            if param["name"] == "event_condition":
-                event_condition = param["value"]
+    try:
+        if function == "plot_kaplan_meier":
+            for param in parameters:
+                if param["name"] == "biomarker_name":
+                    biomarker_name = param["value"]
+                if param["name"] == "hazard_ratio":
+                    hazard_ratio = param["value"]
+                if param["name"] == "p_value":
+                    p_value = param["value"]
+                if param["name"] == "baseline":
+                    baseline = param["value"]
+                if param["name"] == "duration_baseline":
+                    duration_baseline = param["value"]
+                if param["name"] == "event_baseline":
+                    event_baseline = param["value"]
+                if param["name"] == "condition":
+                    condition = param["value"]
+                if param["name"] == "duration_condition":
+                    duration_condition = param["value"]
+                if param["name"] == "event_condition":
+                    event_condition = param["value"]
+            
             ##Following environment variable should be set with your lambda function
             print(os.environ['S3_BUCKET'])
             s3_bucket = os.environ['S3_BUCKET']
             
-        print(type(duration_baseline))
-        print(duration_baseline)
-        duration_baseline = ast.literal_eval(duration_baseline)
-        event_baseline = ast.literal_eval(event_baseline)
-        duration_condition = ast.literal_eval(duration_condition)
-        event_condition = ast.literal_eval(event_condition)
-        print(type(duration_baseline))
-        baseline = '<=10' 
-        condition = '>10'
-        # Execute your business logic here. For more information, refer to: https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
-        fig = plot_kaplan_meier(biomarker_name,baseline, duration_baseline,event_baseline,condition,duration_condition,event_condition)
-        save_plot(fig,s3_bucket)
-        responseBody =  {
+            print(type(duration_baseline))
+            print(duration_baseline)
+            duration_baseline = ast.literal_eval(duration_baseline)
+            event_baseline = ast.literal_eval(event_baseline)
+            duration_condition = ast.literal_eval(duration_condition)
+            event_condition = ast.literal_eval(event_condition)
+            print(type(duration_baseline))
+            baseline = '<=10' 
+            condition = '>10'
+            # Execute your business logic here. For more information, refer to: https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html
+            fig = plot_kaplan_meier(biomarker_name, baseline, duration_baseline, event_baseline, condition, duration_condition, event_condition)
+            save_plot(fig, s3_bucket)
+            responseBody = {
+                "TEXT": {
+                    "body": "The function {} was called successfully!".format(function)
+                }
+            }
+    except Exception as e:
+        responseBody = {
             "TEXT": {
-                "body": "The function {} was called successfully!".format(function)
+                "body": "An error occurred: {}".format(str(e))
             }
         }
     
