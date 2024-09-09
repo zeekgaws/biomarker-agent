@@ -174,6 +174,35 @@ class BedrockAgent:
             })
 
         return processed_files
+    def listActions(self):
+    
+        client = Session().client('bedrock-agent')
+
+        response = client.list_agent_versions(
+            agentId=self.agent_id
+        )
+        agentversions = []
+        agentactiongroups = []
+
+        for version in response['agentVersionSummaries']:
+            if version['agentVersion'].isnumeric():
+                agentversions.append([version['agentVersion']])
+
+        latestversion = str(agentversions[-1][0])
+            
+        actionlist = client.list_agent_action_groups(
+            agentId='YIXM0FEJMW',
+            agentVersion=latestversion,
+            maxResults=123
+
+        )
+        actiongroupsummary=actionlist['actionGroupSummaries']
+
+        for actiongroup in actiongroupsummary:
+            agentactiongroups.append(actiongroup['actionGroupName'])
+
+        return agentactiongroups
+
 
     def cleanup_temp_files(self):
         shutil.rmtree(self.temp_dir)
