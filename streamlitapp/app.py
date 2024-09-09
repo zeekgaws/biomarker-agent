@@ -63,7 +63,18 @@ with st.sidebar:
 
    
     invocation_id = 1
-    fetch_image = st.button("Fetch KM Plot Chart Image")
+    fetch_image = st.button("Fetch Chart")
+     # Action List
+    st.subheader("Available Actions")
+    actions = bedrock.listActions()
+    selected_actions = []
+    for action in actions:
+        if st.checkbox(action, key=f"action_{action}"):
+            selected_actions.append(action)
+    
+    if st.button("Select Actions"):
+        st.session_state.selected_actions = selected_actions
+        st.success(f"Selected actions: {', '.join(selected_actions)}")
 
 # Main content
 st.title("Biomarker Research Agent")
@@ -122,6 +133,9 @@ for index, chat in enumerate(st.session_state["chat_history"]):
                     st.text_area("Trace", value=chat.get("trace", "No trace available"), height=300)
         else:
             st.markdown(chat["prompt"])
+if 'selected_actions' in st.session_state:
+    st.write("Currently selected actions:", ', '.join(st.session_state.selected_actions))
+
 
 # Input area
 prompt = st.chat_input("Ask the bot a question...")
