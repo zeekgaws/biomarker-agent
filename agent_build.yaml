@@ -238,7 +238,7 @@ Resources:
       RetentionInDays: 14
   
   
-  #Gather Assets for pubmed lambda function, and knowledgebase
+  #Gather Assets for pubmed lambda function, knowledgebase and survival data processing lambda
   DataRetrievalLogic:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -295,6 +295,14 @@ Resources:
                 - echo "Moving zip file to project root..."
                 - mv ActionGroups/querydatabaselambda/querydatabaselambda.zip .
                 - aws s3 cp querydatabaselambda.zip s3://${S3Bucket}/querydatabaselambda.zip
+                - cd ActionGroups/survivaldataprocessinglambda
+                - echo "Creating list of items to zip..."
+                - items_to_zip=$(ls -A | tr '\n' ' ')
+                - zip -r survivaldataprocessinglambda.zip $items_to_zip
+                - cd ../..
+                - echo "Moving zip file to project root..."
+                - mv ActionGroups/survivaldataprocessinglambda/survivaldataprocessinglambda.zip .
+                - aws s3 cp survivaldataprocessinglambda.zip s3://${S3Bucket}/survivaldataprocessinglambda.zip
                 - echo "Build phase completed"
       TimeoutInMinutes: 10
 
@@ -1075,7 +1083,31 @@ Resources:
                     Type: "array"
                     Description: "an array of patient subject ID"
                     Required: true
-          
+        - ActionGroupName: survivalDataProcessing
+          Description: Process survival data of patients in order to invoke other tools
+          ActionGroupExecutor: 
+            Lambda: !GetAtt SurvivalDataProcessingLambdaFunction.Arn
+          FunctionSchema:
+            Functions:
+              - Description: "Group based on threshold values"
+                Name: "group_survival_data"
+                Parameters:
+                  biomarker:
+                    Type: "array"
+                    Description: "biomarker expression values, code input not accepted"
+                    Required: true
+                  survival_duration:
+                    Type: "array"
+                    Description: "survival duration values, code input not accepted"
+                    Required: true
+                  survival_status:
+                    Type: "array"
+                    Description: "survival status values, code input not accepted"
+                    Required: true
+                  threshold:
+                    Type: "number"
+                    Description: "Threshold value, code input not accepted"
+                    Required: true
         - ActionGroupName: queryPubMed
           Description: Actions for fetching biomedical literature from PubMed
           ActionGroupExecutor: 
@@ -1331,6 +1363,42 @@ Resources:
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt QueryPubMedLambdaFunction.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt AgentResource.AgentArn
+  
+  SurvivalDataProcessingLambdaRole:
+    Type: 'AWS::IAM::Role'
+    DependsOn: TriggerDataRetrievalLogic
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+  SurvivalDataProcessingLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: SurvivalDataProcessingFunction
+      Handler: survivaldataprocessinglambda.lambda_handler
+      Role: !GetAtt SurvivalDataProcessingLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: survivaldataprocessinglambda.zip
+      Runtime: python3.12
+      Timeout: 30
+      MemorySize: 128
+
+  SurvivalDataProcessingLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SurvivalDataProcessingLambdaFunction.Arn
       Principal: bedrock.amazonaws.com
       SourceArn: !GetAtt AgentResource.AgentArn
   
